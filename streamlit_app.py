@@ -79,25 +79,24 @@ try:
     filter_option = st.radio("조회 기간", ["당월", "전월", "기간조회"], horizontal=True, label_visibility="collapsed")
 
     # 날짜 범위 계산
-    today_ts = pd.Timestamp(now_kst)
-    current_month_start = pd.Timestamp(year=today_ts.year, month=today_ts.month, day=1)
+    current_month_start = datetime(today.year, today.month, 1).date()
     data_max_date = daily_summary["날짜_date"].max()
-    current_month_end = today_ts - pd.Timedelta(days=1)  # 어제까지
+    current_month_end = (today - pd.Timedelta(days=1))  # 어제까지 (date)
     if pd.notna(data_max_date):
-        current_month_end = min(current_month_end, pd.Timestamp(data_max_date))
+        current_month_end = min(current_month_end, data_max_date)
 
     # 전월 계산
-    first_day_current = pd.Timestamp(year=today_ts.year, month=today_ts.month, day=1)
+    first_day_current = current_month_start
     last_day_prev = first_day_current - pd.Timedelta(days=1)
-    prev_month_start = pd.Timestamp(year=last_day_prev.year, month=last_day_prev.month, day=1)
+    prev_month_start = datetime(last_day_prev.year, last_day_prev.month, 1).date()
 
     # 날짜 범위 결정
     if filter_option == "당월":
-        start_date = current_month_start.date()
-        end_date = current_month_end.date()
+        start_date = current_month_start
+        end_date = current_month_end
     elif filter_option == "전월":
-        start_date = prev_month_start.date()
-        end_date = last_day_prev.date()
+        start_date = prev_month_start
+        end_date = last_day_prev
     else:  # 기간조회
         min_date = daily_summary[daily_summary["날짜_date"] != today]["날짜"].min()
         max_date = daily_summary[daily_summary["날짜_date"] != today]["날짜"].max()
