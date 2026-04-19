@@ -413,6 +413,22 @@ try:
         metric_col, pcs_col = metric_map[metric_option]
         factory_data["선택지표"] = factory_data[metric_col].replace([np.inf, -np.inf], 0).fillna(0)
 
+        hover_data = {
+            "총실적": ":,",
+            "유효생산량": ":,",
+            "과생산량": ":,",
+            "불필요생산량": ":,",
+            "유효 대응률(수량)(%)": ":.1f",
+            "유효 대응률(규격)(%)": ":.1f",
+            "필요 규격 수": ":,",
+            "대응 규격 수": ":,",
+            "유효비율(%)": ":.1f",
+            "과생산비율(%)": ":.1f",
+            "불필요비율(%)": ":.1f",
+            "선택지표": ":.1f",
+        }
+        hover_data = {k: v for k, v in hover_data.items() if k in factory_data.columns}
+
         fig = px.bar(
             factory_data,
             x="공장",
@@ -420,20 +436,7 @@ try:
             color="공장",
             title=f"공장별 {metric_option} (%)",
             text="선택지표",
-            hover_data={
-                "총실적": ":,",
-                "유효생산량": ":,",
-                "과생산량": ":,",
-                "불필요생산량": ":,",
-                "유효 대응률(수량)(%)": ":.1f",
-                "유효 대응률(규격)(%)": ":.1f",
-                "필요 규격 수": ":,",
-                "대응 규격 수": ":,",
-                "유효비율(%)": ":.1f",
-                "과생산비율(%)": ":.1f",
-                "불필요비율(%)": ":.1f",
-                "선택지표": ":.1f",
-            },
+            hover_data=hover_data,
         )
         fig.update_traces(
             texttemplate="%{text:.1f}%",
