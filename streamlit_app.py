@@ -291,7 +291,7 @@ try:
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown(f"**선택 지표: {metric_option} (%)**")
-        st.caption("Tip: A관처럼 필요수량이 큰 공장은 '수요대응율(총실적대비)'만 보면 좋아 보일 수 있어 '수요충족률(필요대비)'로 같이 확인하는 것이 안전합니다.")
+        st.caption("Tip: 필요수량(= 수요대응생산량 + 부족수량)은 기간/제품믹스에 따라 크게 달라질 수 있어, '수요대응율(총실적대비)'만 보지 말고 '수요충족률(필요대비)'도 같이 확인하는 것이 안전합니다.")
 
         # 공장_신규분류별 통합 현황
         combined_summary = factory_summary_filtered.groupby(["공장", "신규분류요약"], dropna=False).agg({
