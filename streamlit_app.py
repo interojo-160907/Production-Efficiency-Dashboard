@@ -13,14 +13,14 @@ DASHBOARD_TITLE = "생산 운영 현황 대시보드"
 KPI_LABEL_MAP = {
     "총실적": "총 생산량",
     "총부족수량": "미충족 수요",
-    "유효생산량": "수요 반영 생산량",
-    "과생산량": "사전 확보 생산량",
-    "불필요생산량": "운영 편차 생산량",
+    "유효생산량": "정확 대응 생산량",
+    "과생산량": "초과 생산량",
+    "불필요생산량": "비정형 생산량",
 }
 RATE_LABEL_MAP = {
-    "유효비율(%)": "수요 반영 비중(%)",
-    "과생산비율(%)": "사전 확보 비중(%)",
-    "불필요비율(%)": "운영 편차 비중(%)",
+    "유효비율(%)": "정확 대응 비중(%)",
+    "과생산비율(%)": "초과 생산 비중(%)",
+    "불필요비율(%)": "비정형 생산 비중(%)",
 }
 
 st.set_page_config(page_title=DASHBOARD_TITLE, layout="wide", initial_sidebar_state="collapsed")
@@ -230,28 +230,34 @@ try:
         render_kpi_card(
             f"{KPI_LABEL_MAP['총실적']} (pcs)",
             f"{total_prod:,}",
+            right_label="유효 대응률",
+            right_value=valid_rate,
+            right_color="#1d4ed8",
             sub=f"선택기간 `{prod_days}`일",
         )
     with col2:
         render_kpi_card(
             f"{KPI_LABEL_MAP['유효생산량']} (pcs)",
             f"{valid_prod:,}",
-            right_label=RATE_LABEL_MAP["유효비율(%)"],
+            right_label=RATE_LABEL_MAP["유효비율(%)"].replace("(%)", ""),
             right_value=valid_rate,
             right_color="#047857",
             sub=f"{KPI_LABEL_MAP['총실적']} 대비",
         )
     with col3:
         render_kpi_card(
-            f"{KPI_LABEL_MAP['총부족수량']} (참고) (pcs)",
-            f"{shortage_snapshot:,}",
-            sub="*선택기간 종료일 스냅샷(참고용)",
+            f"{KPI_LABEL_MAP['과생산량']} (pcs)",
+            f"{over_prod:,}",
+            right_label=RATE_LABEL_MAP["과생산비율(%)"].replace("(%)", ""),
+            right_value=over_rate,
+            right_color="#b91c1c",
+            sub=f"{KPI_LABEL_MAP['총실적']} 대비",
         )
     with col4:
         render_kpi_card(
             f"{KPI_LABEL_MAP['불필요생산량']} (pcs)",
             f"{waste_prod:,}",
-            right_label=RATE_LABEL_MAP["불필요비율(%)"],
+            right_label=RATE_LABEL_MAP["불필요비율(%)"].replace("(%)", ""),
             right_value=waste_rate,
             right_color="#b45309",
             sub=f"{KPI_LABEL_MAP['총실적']} 대비",
@@ -259,11 +265,12 @@ try:
 
     with st.expander("지표 정의/상세 보기", expanded=False):
         st.markdown(
-            "- `미충족 수요` : 45일 수주 기준 현재 남아 있는 수요 스냅샷\n"
-            "- `수요 반영 생산량` : 실제 수요 대응에 반영된 생산량\n"
-            "- `사전 확보 생산량` : 향후 대응을 위해 선제적으로 확보된 생산량\n"
-            "- `운영 편차 생산량` : 일반적인 수요 대응 흐름과 다르게 운영된 생산량\n"
-            "- *`미충족 수요`는 스냅샷 값이라 기간 합계(sum)로 더하면 중복될 수 있어, 선택기간 종료일 스냅샷을 참고용으로 표시합니다.*"
+            "- `필요 수량(SKU)` : 해당 기간 실제 필요한 SKU 수량(불필요 SKU 제외)\n"
+            "- `정확 대응 생산량` : SKU별 `min(생산, 필요)`의 합\n"
+            "- `초과 생산량` : SKU별 `max(생산-필요, 0)`의 합\n"
+            "- `비정형 생산량` : 필요 SKU 외 생산(필요=0인데 생산>0)\n"
+            "- `유효 대응률` = `정확 대응 생산량` ÷ `총 생산량`\n"
+            "- 참고: `미충족 수요`는 45일 수주 기준 스냅샷 값으로 운영 참고용입니다."
         )
         st.write(f"- 선택기간 종료일 `미충족 수요`(스냅샷): `{shortage_snapshot:,}` pcs")
         if shortage_snapshot_date is not None:
@@ -276,7 +283,7 @@ try:
     if len(factory_summary_filtered) == 0:
         st.info("선택한 기간에 공장별 데이터가 없습니다.")
     else:
-        # 공장별 기간 집계
+        # 공장별 기간 집계 (정확/초과/비정형 분해)
         factory_data = factory_summary_filtered.groupby("공장", dropna=False).agg(
             {
                 "총실적": "sum",
@@ -290,99 +297,30 @@ try:
         factory_data["과생산비율(%)"] = (factory_data["과생산량"] / factory_data["총실적"] * 100).fillna(0)
         factory_data["불필요비율(%)"] = (factory_data["불필요생산량"] / factory_data["총실적"] * 100).fillna(0)
 
-        # 공장별 기준 미충족 수요(스냅샷) 계산: start_date 이전 마지막 스냅샷(없으면 start_date 이후 첫 스냅샷)
-        # NOTE: 공장_신규분류별 시트는 (공장, 날짜, 분류) 단위이므로 공장 기준 스냅샷은 날짜별 합계로 만든 뒤 사용합니다.
-        base_for_baseline = (
-            factory_summary.dropna(subset=["생산일자_date"])
-            .groupby(["생산일자_date", "공장"], dropna=False)["총부족수량"]
-            .sum()
-            .reset_index()
-        )
-        base_for_baseline = base_for_baseline[base_for_baseline["생산일자_date"] != today]
-
-        before = base_for_baseline[base_for_baseline["생산일자_date"] < start_date]
-        after = base_for_baseline[base_for_baseline["생산일자_date"] >= start_date]
-
-        baseline_parts = []
-        if len(before) > 0:
-            idx_prev = before.groupby("공장")["생산일자_date"].idxmax()
-            baseline_parts.append(
-                before.loc[idx_prev, ["공장", "총부족수량", "생산일자_date"]].rename(
-                    columns={"총부족수량": "기준 미충족 수요", "생산일자_date": "기준일"}
-                )
-            )
-        if len(after) > 0:
-            idx_first = after.groupby("공장")["생산일자_date"].idxmin()
-            baseline_first = after.loc[idx_first, ["공장", "총부족수량", "생산일자_date"]].rename(
-                columns={"총부족수량": "기준 미충족 수요", "생산일자_date": "기준일"}
-            )
-            if len(baseline_parts) > 0:
-                already = set(baseline_parts[0]["공장"].dropna().tolist())
-                baseline_first = baseline_first[~baseline_first["공장"].isin(already)]
-            baseline_parts.append(baseline_first)
-
-        if len(baseline_parts) > 0:
-            baseline_short = pd.concat(baseline_parts, ignore_index=True)
-        else:
-            baseline_short = pd.DataFrame(columns=["공장", "기준 미충족 수요", "기준일"])
-
-        baseline_short["기준 미충족 수요"] = baseline_short["기준 미충족 수요"].fillna(0)
-        baseline_short["기준일"] = baseline_short["기준일"].astype(str)
-
-        # 참고용: 기간 종료일 기준 미충족 수요(스냅샷)
-        end_snapshot = (
-            factory_summary_filtered.dropna(subset=["생산일자_date"])
-            .groupby(["생산일자_date", "공장"], dropna=False)["총부족수량"]
-            .sum()
-            .reset_index()
-        )
-        if len(end_snapshot) > 0:
-            idx_end = end_snapshot.groupby("공장")["생산일자_date"].idxmax()
-            end_short = end_snapshot.loc[idx_end, ["공장", "총부족수량", "생산일자_date"]].rename(
-                columns={"총부족수량": "종료 미충족 수요(참고)", "생산일자_date": "종료일"}
-            )
-        else:
-            end_short = pd.DataFrame(columns=["공장", "종료 미충족 수요(참고)", "종료일"])
-        end_short["종료 미충족 수요(참고)"] = end_short["종료 미충족 수요(참고)"].fillna(0)
-        end_short["종료일"] = end_short["종료일"].astype(str)
-
-        factory_data = factory_data.merge(baseline_short, on="공장", how="left")
-        factory_data = factory_data.merge(end_short, on="공장", how="left")
-        factory_data["기준 미충족 수요"] = factory_data["기준 미충족 수요"].fillna(0)
-        factory_data["기준일"] = factory_data["기준일"].fillna("")
-        factory_data["종료 미충족 수요(참고)"] = factory_data["종료 미충족 수요(참고)"].fillna(0)
-        factory_data["종료일"] = factory_data["종료일"].fillna("")
-
-        # 공장 비교용 핵심 지표(3축)
-        factory_data["생산 대응 수준(%)"] = np.where(
-            factory_data["기준 미충족 수요"] > 0,
-            factory_data["유효생산량"] / factory_data["기준 미충족 수요"] * 100,
-            0,
-        )
-        factory_data["운영 편차 비중(%)"] = factory_data["불필요생산량"] / factory_data["총실적"] * 100
-        factory_data["사전 확보 비중(%)"] = factory_data["과생산량"] / factory_data["총실적"] * 100
-        factory_data["운영 편차 비중(%)"] = factory_data["운영 편차 비중(%)"].replace([np.inf, -np.inf], 0).fillna(0)
-        factory_data["사전 확보 비중(%)"] = factory_data["사전 확보 비중(%)"].replace([np.inf, -np.inf], 0).fillna(0)
+        # 공장별 KPI (정확도 기반)
+        factory_data["유효 대응률(%)"] = factory_data["유효비율(%)"]
 
         metric_option = st.radio(
             "공장 비교 지표",
-            ["생산 대응 수준", "운영 편차 비중", "사전 확보 비중"],
+            ["유효 대응률", "정확 대응 비중", "초과 생산 비중", "비정형 생산 비중"],
             horizontal=True,
         )
         metric_desc = {
-            "생산 대응 수준": "기준 시점 미충족 수요 대비, 선택 기간 중 수요 반영 생산이 어느 정도 반영됐는지",
-            "운영 편차 비중": "총 생산 중 운영 편차 생산이 차지하는 비중",
-            "사전 확보 비중": "총 생산 중 미래 대응 목적 생산 비중",
+            "유효 대응률": "총 생산 중 ‘정확 대응 생산량’ 비율(=정확 대응 비중)",
+            "정확 대응 비중": "총 생산량 중 정확 대응 생산량이 차지하는 비중",
+            "초과 생산 비중": "총 생산량 중 초과 생산량이 차지하는 비중",
+            "비정형 생산 비중": "총 생산량 중 비정형 생산량이 차지하는 비중",
         }
         st.caption(f"설명: {metric_desc[metric_option]}")
 
         metric_map = {
-            "생산 대응 수준": ("생산 대응 수준(%)", "유효생산량"),
-            "운영 편차 비중": ("운영 편차 비중(%)", "불필요생산량"),
-            "사전 확보 비중": ("사전 확보 비중(%)", "과생산량"),
+            "유효 대응률": ("유효 대응률(%)", "유효생산량"),
+            "정확 대응 비중": ("유효비율(%)", "유효생산량"),
+            "초과 생산 비중": ("과생산비율(%)", "과생산량"),
+            "비정형 생산 비중": ("불필요비율(%)", "불필요생산량"),
         }
         metric_col, pcs_col = metric_map[metric_option]
-        factory_data["선택지표"] = factory_data[metric_col].fillna(0)
+        factory_data["선택지표"] = factory_data[metric_col].replace([np.inf, -np.inf], 0).fillna(0)
 
         fig = px.bar(
             factory_data,
@@ -393,13 +331,13 @@ try:
             text="선택지표",
             hover_data={
                 "총실적": ":,",
-                "기준 미충족 수요": ":,",
-                "기준일": True,
-                "종료 미충족 수요(참고)": ":,",
-                "종료일": True,
                 "유효생산량": ":,",
                 "과생산량": ":,",
                 "불필요생산량": ":,",
+                "유효 대응률(%)": ":.1f",
+                "유효비율(%)": ":.1f",
+                "과생산비율(%)": ":.1f",
+                "불필요비율(%)": ":.1f",
                 "선택지표": ":.1f",
             },
         )
@@ -413,7 +351,7 @@ try:
             height=520,
             showlegend=False,
             margin=dict(l=0, r=0, t=60, b=0),
-            yaxis=dict(title=dict(text=f"{metric_option} (%)", font=dict(size=16, family="Arial", color="#222222"))),
+            yaxis=dict(range=[0, 100], title=dict(text=f"{metric_option} (%)", font=dict(size=16, family="Arial", color="#222222"))),
             xaxis=dict(
                 title=dict(text="공장", font=dict(size=16, family="Arial", color="#222222")),
                 tickfont=dict(size=18, family="Arial", color="#222222")
@@ -423,7 +361,7 @@ try:
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown(f"**선택 지표: {metric_option} (%)**")
-        st.caption("Tip: `미충족 수요`는 기간 중 계속 변하므로 공장 비교 분모로 쓰지 않고, `기준 미충족 수요(시작 시점 스냅샷)`를 고정 분모로 사용합니다.")
+        st.caption("Tip: ‘유효 대응률’은 필요 수량 대비 생산 정확도를 반영한 지표로, backlog 크기 영향 없이 공장 비교가 가능합니다.")
 
         # 공장_신규분류별 통합 현황
         combined_summary = factory_summary_filtered.groupby(["공장", "신규분류요약"], dropna=False).agg({
@@ -438,44 +376,25 @@ try:
         combined_summary["과생산비율(%)"] = (combined_summary["과생산량"] / combined_summary["총실적"] * 100).fillna(0)
         combined_summary["불필요비율(%)"] = (combined_summary["불필요생산량"] / combined_summary["총실적"] * 100).fillna(0)
 
-        # 공장별 기준 미충족 수요(고정 분모) 병합
-        combined_summary = combined_summary.merge(
-            baseline_short[["공장", "기준 미충족 수요"]],
-            on="공장",
-            how="left",
-        )
-        combined_summary["기준 미충족 수요"] = combined_summary["기준 미충족 수요"].fillna(0)
-        combined_summary["생산 대응 수준(%)"] = np.where(
-            combined_summary["기준 미충족 수요"] > 0,
-            combined_summary["유효생산량"] / combined_summary["기준 미충족 수요"] * 100,
-            0,
-        )
-        combined_summary["운영 편차 비중(%)"] = (combined_summary["불필요생산량"] / combined_summary["총실적"] * 100).replace([np.inf, -np.inf], 0).fillna(0)
-        combined_summary["사전 확보 비중(%)"] = (combined_summary["과생산량"] / combined_summary["총실적"] * 100).replace([np.inf, -np.inf], 0).fillna(0)
+        combined_summary["유효 대응률(%)"] = combined_summary["유효비율(%)"]
 
         # 선택지표 추가
         metric_map = {
-            "생산 대응 수준": ("생산 대응 수준(%)", "유효생산량"),
-            "운영 편차 비중": ("운영 편차 비중(%)", "불필요생산량"),
-            "사전 확보 비중": ("사전 확보 비중(%)", "과생산량"),
+            "유효 대응률": ("유효 대응률(%)", "유효생산량"),
+            "정확 대응 비중": ("유효비율(%)", "유효생산량"),
+            "초과 생산 비중": ("과생산비율(%)", "과생산량"),
+            "비정형 생산 비중": ("불필요비율(%)", "불필요생산량"),
         }
         metric_col, pcs_col = metric_map[metric_option]
         combined_summary["선택지표"] = combined_summary[metric_col].fillna(0)
 
         # 테이블 표시
         base_cols = ["공장", "신규분류요약", "총실적"]
-        if metric_option == "생산 대응 수준":
-            display_combined = combined_summary[base_cols + ["기준 미충족 수요", pcs_col, "선택지표"]].copy()
-        else:
-            display_combined = combined_summary[base_cols + [pcs_col, "선택지표"]].copy()
+        display_combined = combined_summary[base_cols + [pcs_col, "선택지표"]].copy()
         total_hdr = f"{KPI_LABEL_MAP['총실적']} (pcs)"
-        baseline_hdr = "기준 미충족 수요 (pcs)"
         pcs_hdr = f"{KPI_LABEL_MAP[pcs_col]} (pcs)"
         rate_hdr = f"{metric_option} (%)"
-        if metric_option == "생산 대응 수준":
-            display_combined.columns = ["공장", "신규분류요약", total_hdr, baseline_hdr, pcs_hdr, rate_hdr]
-        else:
-            display_combined.columns = ["공장", "신규분류요약", total_hdr, pcs_hdr, rate_hdr]
+        display_combined.columns = ["공장", "신규분류요약", total_hdr, pcs_hdr, rate_hdr]
 
         # 공장 순서 지정 (A관 > C관 > S관)
         factory_order = {"A관(1공장)": 1, "C관(2공장)": 2, "S관(3공장)": 3}
@@ -484,8 +403,6 @@ try:
         display_combined = display_combined.drop("_factory_sort", axis=1)
 
         display_combined[total_hdr] = display_combined[total_hdr].map("{:,.0f}".format)
-        if metric_option == "생산 대응 수준":
-            display_combined[baseline_hdr] = display_combined[baseline_hdr].map("{:,.0f}".format)
         display_combined[pcs_hdr] = display_combined[pcs_hdr].map("{:,.0f}".format)
         display_combined[rate_hdr] = display_combined[rate_hdr].map("{:.1f}%".format)
 
@@ -508,8 +425,6 @@ try:
             "<th>신규분류요약</th>",
             f"<th>{total_hdr}</th>",
         ]
-        if metric_option == "생산 대응 수준":
-            header_lines.append(f"<th>{baseline_hdr}</th>")
         header_lines.extend(
             [
                 f"<th>{pcs_hdr}</th>",
@@ -530,8 +445,6 @@ try:
                     html_parts.append(f"<td rowspan='{rowspan}' style='vertical-align: middle; font-weight: 600;'>{factory_name}</td>")
                 html_parts.append(f"<td>{row['신규분류요약']}</td>")
                 html_parts.append(f"<td class='number'>{row[total_hdr]}</td>")
-                if metric_option == "생산 대응 수준":
-                    html_parts.append(f"<td class='number'>{row[baseline_hdr]}</td>")
                 html_parts.append(f"<td class='number'>{row[pcs_hdr]}</td>")
                 html_parts.append(f"<td class='number'>{row[rate_hdr]}</td>")
                 html_parts.append("</tr>")
