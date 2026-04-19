@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
@@ -231,6 +232,7 @@ try:
     over_rate = (over_prod / total_prod * 100) if total_prod > 0 else 0
     waste_rate = (waste_prod / total_prod * 100) if total_prod > 0 else 0
     fulfillment_rate = (valid_prod / demand_total * 100) if demand_total > 0 else 0
+    fulfillment_rate = min(fulfillment_rate, 100.0)
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -330,7 +332,14 @@ try:
         factory_data["부족수량(스냅샷)"] = factory_data["부족수량(스냅샷)"].fillna(0)
 
         factory_data["부족수량 (생산 타겟)"] = factory_data["부족수량(스냅샷)"].fillna(0)
-        factory_data["수요충족률(%)"] = (factory_data["유효생산량"] / factory_data["부족수량 (생산 타겟)"] * 100).fillna(0)
+        
+        # 일별 수요충족률의 평균으로 계산 (기간 합계의 왜곡 방지)
+        tmp_daily = factory_summary_filtered.groupby(["생산일자_date", "공장"])[["유효생산량", "총부족수량"]].sum().reset_index()
+        tmp_daily["일별충족률"] = (tmp_daily["유효생산량"] / tmp_daily["총부족수량"] * 100).replace([np.inf, -np.inf], 0).fillna(0).clip(upper=100.0)
+        avg_fulfillment = tmp_daily.groupby("공장")["일별충족률"].mean().reset_index().rename(columns={"일별충족률": "수요충족률(%)"})
+        
+        factory_data = factory_data.merge(avg_fulfillment, on="공장", how="left")
+        factory_data["수요충족률(%)"] = factory_data["수요충족률(%)"].fillna(0)
         # 백로그 해소 추정(일) = 부족(스냅샷) / (선택기간 일평균 수요대응 생산량)
         prod_days_factory = int(factory_summary_filtered["생산일자_date"].nunique()) if len(factory_summary_filtered) > 0 else 0
         factory_data["일평균수요대응(pcs/일)"] = (factory_data["유효생산량"] / prod_days_factory).fillna(0) if prod_days_factory > 0 else 0
@@ -414,7 +423,14 @@ try:
         combined_summary["과생산비율(%)"] = (combined_summary["과생산량"] / combined_summary["총실적"] * 100).fillna(0)
         combined_summary["불필요비율(%)"] = (combined_summary["불필요생산량"] / combined_summary["총실적"] * 100).fillna(0)
         combined_summary["부족수량 (생산 타겟)"] = combined_summary["부족수량(스냅샷)"].fillna(0)
-        combined_summary["수요충족률(%)"] = (combined_summary["유효생산량"] / combined_summary["부족수량 (생산 타겟)"] * 100).fillna(0)
+        
+        # 일별 수요충족률의 평균으로 계산
+        tmp_daily_comb = factory_summary_filtered.groupby(["생산일자_date", "공장", "신규분류요약"])[["유효생산량", "총부족수량"]].sum().reset_index()
+        tmp_daily_comb["일별충족률"] = (tmp_daily_comb["유효생산량"] / tmp_daily_comb["총부족수량"] * 100).replace([np.inf, -np.inf], 0).fillna(0).clip(upper=100.0)
+        avg_fulfillment_comb = tmp_daily_comb.groupby(["공장", "신규분류요약"])["일별충족률"].mean().reset_index().rename(columns={"일별충족률": "수요충족률(%)"})
+        
+        combined_summary = combined_summary.merge(avg_fulfillment_comb, on=["공장", "신규분류요약"], how="left")
+        combined_summary["수요충족률(%)"] = combined_summary["수요충족률(%)"].fillna(0)
 
         # 선택지표 추가
         metric_map = {
@@ -541,7 +557,7 @@ try:
             factory_daily["선행확보율(%)"] = (factory_daily["과생산량"] / factory_daily["총실적"] * 100).fillna(0)
             factory_daily["비계획율(%)"] = (factory_daily["불필요생산량"] / factory_daily["총실적"] * 100).fillna(0)
             factory_daily["부족수량 (생산 타겟)"] = factory_daily["총부족수량"].fillna(0)
-            factory_daily["수요충족률(부족대비)(%)"] = (factory_daily["유효생산량"] / factory_daily["부족수량 (생산 타겟)"] * 100).fillna(0)
+            factory_daily["수요충족률(부족대비)(%)"] = (factory_daily["유효생산량"] / factory_daily["부족수량 (생산 타겟)"] * 100).replace([np.inf, -np.inf], 0).fillna(0).clip(upper=100.0)
 
             factory_daily_display = factory_daily.rename(columns={
                 "생산일자_date": "날짜",
