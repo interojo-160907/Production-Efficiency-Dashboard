@@ -11,6 +11,7 @@ import plotly.express as px
 DASHBOARD_TITLE = "수요 대응 생산량 대시보드"
 KPI_LABEL_MAP = {
     "총실적": "총 생산량",
+    "총부족수량": "총 부족수량",
     "유효생산량": "수요 대응 생산량",
     "과생산량": "선행 확보 생산량",
     "불필요생산량": "비계획 생산량",
@@ -219,18 +220,25 @@ try:
 
         metric_option = st.radio(
             "표시할 지표를 선택하세요",
-            ["수요대응율", "선행확보율", "비계획율"],
+            ["수요대응율(총실적대비)", "수요충족률(필요대비)", "선행확보율", "비계획율"],
             horizontal=True
         )
         metric_desc = {
-            "수요대응율": "해당 수요 대비 실제 대응된 생산 비율",
+            "수요대응율(총실적대비)": "총 생산량(실적) 중 수요 대응 생산량이 차지하는 비중",
+            "수요충족률(필요대비)": "필요수량(= 수요대응생산량 + 부족수량) 대비 수요 대응 생산량 비율",
             "선행확보율": "향후 대응을 위한 선제 생산 비율",
             "비계획율": "수요 기준에 포함되지 않은 생산 비율",
         }
         st.caption(f"설명: {metric_desc[metric_option]}")
 
+        # 공장별 추가 지표 (필요대비)
+        factory_data["필요수량"] = (factory_data["유효생산량"] + factory_data["총부족수량"]).fillna(0)
+        factory_data["수요충족률(%)"] = (factory_data["유효생산량"] / factory_data["필요수량"] * 100).fillna(0)
+        factory_data["부족률(%)"] = (factory_data["총부족수량"] / factory_data["필요수량"] * 100).fillna(0)
+
         metric_map = {
-            "수요대응율": ("유효비율(%)", "유효생산량"),
+            "수요대응율(총실적대비)": ("유효비율(%)", "유효생산량"),
+            "수요충족률(필요대비)": ("수요충족률(%)", "유효생산량"),
             "선행확보율": ("과생산비율(%)", "과생산량"),
             "비계획율": ("불필요비율(%)", "불필요생산량"),
         }
@@ -243,7 +251,18 @@ try:
             y="선택지표",
             color="공장",
             title=f"공장별 {metric_option} (%)",
-            text="선택지표"
+            text="선택지표",
+            hover_data={
+                "총실적": ":,",
+                "필요수량": ":,",
+                "총부족수량": ":,",
+                "유효생산량": ":,",
+                "과생산량": ":,",
+                "불필요생산량": ":,",
+                "수요충족률(%)": ":.1f",
+                "부족률(%)": ":.1f",
+                "선택지표": ":.1f",
+            },
         )
         fig.update_traces(
             texttemplate="%{text:.1f}%",
@@ -255,10 +274,7 @@ try:
             height=520,
             showlegend=False,
             margin=dict(l=0, r=0, t=60, b=0),
-            yaxis=dict(
-                range=[0, 100],
-                title=dict(text=f"{metric_option} (%)", font=dict(size=16, family="Arial", color="#222222"))
-            ),
+            yaxis=dict(range=[0, 100], title=dict(text=f"{metric_option} (%)", font=dict(size=16, family="Arial", color="#222222"))),
             xaxis=dict(
                 title=dict(text="공장", font=dict(size=16, family="Arial", color="#222222")),
                 tickfont=dict(size=18, family="Arial", color="#222222")
@@ -268,10 +284,12 @@ try:
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown(f"**선택 지표: {metric_option} (%)**")
+        st.caption("Tip: A관처럼 필요수량이 큰 공장은 '수요대응율(총실적대비)'만 보면 좋아 보일 수 있어 '수요충족률(필요대비)'로 같이 확인하는 것이 안전합니다.")
 
         # 공장_신규분류별 통합 현황
         combined_summary = factory_summary_filtered.groupby(["공장", "신규분류요약"], dropna=False).agg({
             "총실적": "sum",
+            "총부족수량": "sum",
             "유효생산량": "sum",
             "과생산량": "sum",
             "불필요생산량": "sum"
@@ -281,10 +299,13 @@ try:
         combined_summary["유효비율(%)"] = (combined_summary["유효생산량"] / combined_summary["총실적"] * 100).fillna(0)
         combined_summary["과생산비율(%)"] = (combined_summary["과생산량"] / combined_summary["총실적"] * 100).fillna(0)
         combined_summary["불필요비율(%)"] = (combined_summary["불필요생산량"] / combined_summary["총실적"] * 100).fillna(0)
+        combined_summary["필요수량"] = (combined_summary["유효생산량"] + combined_summary["총부족수량"]).fillna(0)
+        combined_summary["수요충족률(%)"] = (combined_summary["유효생산량"] / combined_summary["필요수량"] * 100).fillna(0)
 
         # 선택지표 추가
         metric_map = {
-            "수요대응율": ("유효비율(%)", "유효생산량"),
+            "수요대응율(총실적대비)": ("유효비율(%)", "유효생산량"),
+            "수요충족률(필요대비)": ("수요충족률(%)", "유효생산량"),
             "선행확보율": ("과생산비율(%)", "과생산량"),
             "비계획율": ("불필요비율(%)", "불필요생산량"),
         }
@@ -292,11 +313,20 @@ try:
         combined_summary["선택지표"] = combined_summary[metric_col]
 
         # 테이블 표시
-        display_combined = combined_summary[["공장", "신규분류요약", "총실적", pcs_col, "선택지표"]].copy()
+        base_cols = ["공장", "신규분류요약", "총실적"]
+        if metric_option == "수요충족률(필요대비)":
+            display_combined = combined_summary[base_cols + ["필요수량", "총부족수량", pcs_col, "선택지표"]].copy()
+        else:
+            display_combined = combined_summary[base_cols + [pcs_col, "선택지표"]].copy()
         total_hdr = f"{KPI_LABEL_MAP['총실적']} (pcs)"
+        demand_hdr = "필요수량 (pcs)"
+        shortage_hdr = f"{KPI_LABEL_MAP['총부족수량']} (pcs)"
         pcs_hdr = f"{KPI_LABEL_MAP[pcs_col]} (pcs)"
         rate_hdr = f"{metric_option} (%)"
-        display_combined.columns = ["공장", "신규분류요약", total_hdr, pcs_hdr, rate_hdr]
+        if metric_option == "수요충족률(필요대비)":
+            display_combined.columns = ["공장", "신규분류요약", total_hdr, demand_hdr, shortage_hdr, pcs_hdr, rate_hdr]
+        else:
+            display_combined.columns = ["공장", "신규분류요약", total_hdr, pcs_hdr, rate_hdr]
 
         # 공장 순서 지정 (A관 > C관 > S관)
         factory_order = {"A관(1공장)": 1, "C관(2공장)": 2, "S관(3공장)": 3}
@@ -305,6 +335,9 @@ try:
         display_combined = display_combined.drop("_factory_sort", axis=1)
 
         display_combined[total_hdr] = display_combined[total_hdr].map("{:,.0f}".format)
+        if metric_option == "수요충족률(필요대비)":
+            display_combined[demand_hdr] = display_combined[demand_hdr].map("{:,.0f}".format)
+            display_combined[shortage_hdr] = display_combined[shortage_hdr].map("{:,.0f}".format)
         display_combined[pcs_hdr] = display_combined[pcs_hdr].map("{:,.0f}".format)
         display_combined[rate_hdr] = display_combined[rate_hdr].map("{:.1f}%".format)
 
@@ -323,6 +356,7 @@ try:
                <th>공장</th>
                <th>신규분류요약</th>
               <th>{total_hdr}</th>
+              {"<th>" + demand_hdr + "</th><th>" + shortage_hdr + "</th>" if metric_option == "수요충족률(필요대비)" else ""}
               <th>{pcs_hdr}</th>
               <th>{rate_hdr}</th>
              </tr>
@@ -339,6 +373,9 @@ try:
                     html += f"<td rowspan='{rowspan}' style='vertical-align: middle; font-weight: 600;'>{factory_name}</td>"
                 html += f"<td>{row['신규분류요약']}</td>"
                 html += f"<td class='number'>{row[total_hdr]}</td>"
+                if metric_option == "수요충족률(필요대비)":
+                    html += f"<td class='number'>{row[demand_hdr]}</td>"
+                    html += f"<td class='number'>{row[shortage_hdr]}</td>"
                 html += f"<td class='number'>{row[pcs_hdr]}</td>"
                 html += f"<td class='number'>{row[rate_hdr]}</td>"
                 html += "</tr>"
