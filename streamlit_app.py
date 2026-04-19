@@ -33,22 +33,44 @@ st.markdown("""
         padding: 20px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
-    .rate-pill {
-        display: inline-block;
-        width: auto;
-        text-align: center;
-        font-size: 22px;
-        font-weight: 800;
-        margin: 6px auto 0;
-        padding: 4px 12px;
-        border-radius: 8px;
-        letter-spacing: 0.2px;
+    .kpi-card {
+        background-color: #f0f4f8;
+        border-radius: 12px;
+        padding: 18px 20px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        height: 100%;
     }
-    .rate-sub {
-        font-size: 12px;
+    .kpi-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 10px;
+        margin-bottom: 6px;
+    }
+    .kpi-title {
+        font-size: 14px;
         font-weight: 700;
-        opacity: 0.75;
-        margin-right: 8px;
+        color: #374151;
+        line-height: 1.2;
+    }
+    .kpi-right {
+        font-size: 13px;
+        font-weight: 800;
+        white-space: nowrap;
+    }
+    .kpi-value {
+        font-size: 34px;
+        font-weight: 900;
+        color: #111827;
+        letter-spacing: 0.3px;
+        line-height: 1.0;
+        margin: 0;
+    }
+    .kpi-sub {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #6b7280;
+        line-height: 1.2;
     }
     h1 {
         text-align: center;
@@ -64,9 +86,22 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-def render_rate_pill(label: str, value: float, color: str) -> None:
+def render_kpi_card(title: str, value: str, right_label: str | None = None, right_value: float | None = None, right_color: str = "#111827", sub: str | None = None) -> None:
+    right_html = ""
+    if right_label is not None and right_value is not None:
+        right_html = f"<span class='kpi-right' style='color:{right_color};'>{right_label} {right_value:.1f}%</span>"
+    sub_html = f"<div class='kpi-sub'>{sub}</div>" if sub else ""
     st.markdown(
-        f"<span class='rate-sub'>{label}</span><span class='rate-pill' style='color:{color}; background-color:#ffffffaa; border:1px solid #e5e7eb;'>{value:.1f}%</span>",
+        f"""
+<div class="kpi-card">
+  <div class="kpi-head">
+    <div class="kpi-title">{title}</div>
+    {right_html}
+  </div>
+  <div class="kpi-value">{value}</div>
+  {sub_html}
+</div>
+""",
         unsafe_allow_html=True,
     )
 
@@ -188,74 +223,61 @@ try:
     avg_valid_per_day = (valid_prod / prod_days) if prod_days > 0 else 0
     backlog_days = (shortage_snapshot / avg_valid_per_day) if avg_valid_per_day > 0 else None
 
+    valid_rate = (valid_prod / total_prod * 100) if total_prod > 0 else 0
+    over_rate = (over_prod / total_prod * 100) if total_prod > 0 else 0
+    waste_rate = (waste_prod / total_prod * 100) if total_prod > 0 else 0
+    fulfillment_rate = (valid_prod / demand_total * 100) if demand_total > 0 else 0
+
     col1, col2, col3, col4 = st.columns(4)
-
     with col1:
-        st.metric(
-            f"{KPI_LABEL_MAP['총실적']}\n(pcs)",
+        render_kpi_card(
+            f"{KPI_LABEL_MAP['총실적']} (pcs)",
             f"{total_prod:,}",
-            delta=None,
-            delta_color="off"
+            right_label="충족률(필요대비*)",
+            right_value=fulfillment_rate,
+            right_color="#1d4ed8",
+            sub="*부족수량은 45일 수주 부족(스냅샷) 기준",
         )
-
     with col2:
-        valid_rate = (valid_prod / total_prod * 100) if total_prod > 0 else 0
-        fulfillment_rate = (valid_prod / demand_total * 100) if demand_total > 0 else 0
-        st.metric(
-            f"{KPI_LABEL_MAP['유효생산량']}\n(pcs)",
+        render_kpi_card(
+            f"{KPI_LABEL_MAP['유효생산량']} (pcs)",
             f"{valid_prod:,}",
-            delta=None,
-            delta_color="off"
+            right_label="대응율",
+            right_value=valid_rate,
+            right_color="#047857",
+            sub="총실적 대비",
         )
-        render_rate_pill("대응율(총실적대비)", valid_rate, "#047857")
-        render_rate_pill("충족률(45일부족기준)", fulfillment_rate, "#1d4ed8")
-
     with col3:
-        over_rate = (over_prod / total_prod * 100) if total_prod > 0 else 0
-        st.metric(
-            f"{KPI_LABEL_MAP['과생산량']}\n(pcs)",
+        render_kpi_card(
+            f"{KPI_LABEL_MAP['과생산량']} (pcs)",
             f"{over_prod:,}",
-            delta=None,
-            delta_color="off"
+            right_label="선행확보율",
+            right_value=over_rate,
+            right_color="#b91c1c",
+            sub="총실적 대비",
         )
-        render_rate_pill("총실적대비", over_rate, "#b91c1c")
-
     with col4:
-        waste_rate = (waste_prod / total_prod * 100) if total_prod > 0 else 0
-        st.metric(
-            f"{KPI_LABEL_MAP['불필요생산량']}\n(pcs)",
+        render_kpi_card(
+            f"{KPI_LABEL_MAP['불필요생산량']} (pcs)",
             f"{waste_prod:,}",
-            delta=None,
-            delta_color="off"
+            right_label="비계획율",
+            right_value=waste_rate,
+            right_color="#b45309",
+            sub="총실적 대비",
         )
-        render_rate_pill("총실적대비", waste_rate, "#b45309")
 
-    col5, col6, col7 = st.columns(3)
-    with col5:
-        st.metric("45일 수주 부족(스냅샷)\n(pcs)", f"{shortage_snapshot:,}", delta=None, delta_color="off")
+    with st.expander("지표 정의/상세 보기", expanded=False):
+        st.markdown(
+            "- `충족률(필요대비*)` = 수요대응생산량 ÷ (수요대응생산량 + 45일 수주 부족수량 스냅샷)\n"
+            "- `대응율`/`선행확보율`/`비계획율` = 각 생산량 ÷ 총실적\n"
+            "- *`총부족수량`은 45일 수주 기준 스냅샷 값이라 기간 합계로 더하면 중복될 수 있어, 선택기간 종료일 스냅샷을 사용합니다.*"
+        )
+        st.write(f"- 45일 수주 부족(스냅샷): `{shortage_snapshot:,}` pcs")
         if shortage_snapshot_date is not None:
-            st.caption(f"기준일: {shortage_snapshot_date}")
-
-    with col6:
-        st.metric("필요수량(스냅샷)\n(pcs)", f"{demand_total:,}", delta=None, delta_color="off")
-        st.caption("= 수요대응생산량 + 45일 부족(스냅샷)")
-
-    with col7:
-        backlog_text = "-" if backlog_days is None else f"{backlog_days:.1f}"
-        st.metric("백로그 해소 추정\n(일)", backlog_text, delta=None, delta_color="off")
-        st.caption(f"일평균 수요대응: {avg_valid_per_day:,.0f} pcs/일 (선택기간 {prod_days}일)")
-
-    st.caption(
-        "수요 대응 생산량: 수요 기준에 따라 실제로 활용 가능한 생산량  \n"
-        "선행 확보 생산량: 향후 수요 대응을 위해 선제적으로 확보된 생산량  \n"
-        "비계획 생산량: 현재 수요 기준에 포함되지 않은 생산량  \n"
-        "수요충족률(45일부족기준): 필요수량(= 수요대응생산량 + 45일 수주 기준 부족수량[스냅샷]) 대비 수요 대응 생산량 비율"
-    )
-    if shortage_snapshot_date is not None:
-        st.caption(
-            f"참고: 총부족수량은 45일 수주 기준 값(스냅샷)이라 기간 합계로 더하면 중복될 수 있어, "
-            f"상단/공장별 충족률은 최신일({shortage_snapshot_date}) 스냅샷을 사용합니다."
-        )
+            st.write(f"- 부족 스냅샷 기준일: `{shortage_snapshot_date}`")
+        st.write(f"- 필요수량(스냅샷) = `{demand_total:,}` pcs")
+        if backlog_days is not None:
+            st.write(f"- 백로그 해소 추정: `{backlog_days:.1f}` 일 (일평균 수요대응 `{avg_valid_per_day:,.0f}` pcs/일, 선택기간 `{prod_days}`일)")
 
     st.markdown("<div style='margin-top:50px'></div>", unsafe_allow_html=True)
     # ============== 중간: 차트 ==============
