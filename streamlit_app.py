@@ -209,6 +209,7 @@ try:
         # 공장별 데이터 준비
         factory_data = factory_summary_filtered.groupby("공장", dropna=False).agg({
             "총실적": "sum",
+            "총부족수량": "sum",
             "유효생산량": "sum",
             "과생산량": "sum",
             "불필요생산량": "sum"
