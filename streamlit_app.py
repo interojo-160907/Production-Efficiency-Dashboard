@@ -33,6 +33,23 @@ st.markdown("""
         padding: 20px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
+    .rate-pill {
+        display: inline-block;
+        width: auto;
+        text-align: center;
+        font-size: 22px;
+        font-weight: 800;
+        margin: 6px auto 0;
+        padding: 4px 12px;
+        border-radius: 8px;
+        letter-spacing: 0.2px;
+    }
+    .rate-sub {
+        font-size: 12px;
+        font-weight: 700;
+        opacity: 0.75;
+        margin-right: 8px;
+    }
     h1 {
         text-align: center;
         color: #1f3a93;
@@ -45,6 +62,13 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+
+def render_rate_pill(label: str, value: float, color: str) -> None:
+    st.markdown(
+        f"<span class='rate-sub'>{label}</span><span class='rate-pill' style='color:{color}; background-color:#ffffffaa; border:1px solid #e5e7eb;'>{value:.1f}%</span>",
+        unsafe_allow_html=True,
+    )
 
 @st.cache_data(show_spinner=False)
 def load_result_excel(result_path: Path, mtime_ns: int) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -149,6 +173,20 @@ try:
     valid_prod = int(daily_summary_filtered["유효생산량"].sum()) if len(daily_summary_filtered) > 0 else 0
     over_prod = int(daily_summary_filtered["과생산량"].sum()) if len(daily_summary_filtered) > 0 else 0
     waste_prod = int(daily_summary_filtered["불필요생산량"].sum()) if len(daily_summary_filtered) > 0 else 0
+    # NOTE: '총부족수량'이 45일 수주 기준 부족(스냅샷)이라면 기간 합계(sum)는 중복 집계가 될 수 있어,
+    # 선택 기간의 "마지막 날짜" 기준 스냅샷을 사용합니다.
+    if len(daily_summary_filtered) > 0:
+        daily_last = daily_summary_filtered.sort_values("날짜_date").iloc[-1]
+        shortage_snapshot = int(daily_last["총부족수량"])
+        shortage_snapshot_date = daily_last["날짜_date"]
+    else:
+        shortage_snapshot = 0
+        shortage_snapshot_date = None
+
+    demand_total = valid_prod + shortage_snapshot
+    prod_days = int(daily_summary_filtered["날짜_date"].nunique()) if len(daily_summary_filtered) > 0 else 0
+    avg_valid_per_day = (valid_prod / prod_days) if prod_days > 0 else 0
+    backlog_days = (shortage_snapshot / avg_valid_per_day) if avg_valid_per_day > 0 else None
 
     col1, col2, col3, col4 = st.columns(4)
 
@@ -162,16 +200,15 @@ try:
 
     with col2:
         valid_rate = (valid_prod / total_prod * 100) if total_prod > 0 else 0
+        fulfillment_rate = (valid_prod / demand_total * 100) if demand_total > 0 else 0
         st.metric(
             f"{KPI_LABEL_MAP['유효생산량']}\n(pcs)",
             f"{valid_prod:,}",
             delta=None,
             delta_color="off"
         )
-        st.markdown(
-            f"<div style='display:inline-block; width:auto; text-align:center; font-size:32px; font-weight:900; color:#047857; margin:4px auto 0; padding:4px 14px; border-radius:8px;'> {valid_rate:.1f}% </div>",
-            unsafe_allow_html=True
-        )
+        render_rate_pill("대응율(총실적대비)", valid_rate, "#047857")
+        render_rate_pill("충족률(45일부족기준)", fulfillment_rate, "#1d4ed8")
 
     with col3:
         over_rate = (over_prod / total_prod * 100) if total_prod > 0 else 0
@@ -181,10 +218,7 @@ try:
             delta=None,
             delta_color="off"
         )
-        st.markdown(
-            f"<div style='display:inline-block; width:auto; text-align:center; font-size:32px; font-weight:900; color:#b91c1c; margin:4px auto 0; padding:4px 14px; border-radius:8px;'> {over_rate:.1f}% </div>",
-            unsafe_allow_html=True
-        )
+        render_rate_pill("총실적대비", over_rate, "#b91c1c")
 
     with col4:
         waste_rate = (waste_prod / total_prod * 100) if total_prod > 0 else 0
@@ -194,16 +228,34 @@ try:
             delta=None,
             delta_color="off"
         )
-        st.markdown(
-            f"<div style='display:inline-block; width:auto; text-align:center; font-size:32px; font-weight:900; color:#b45309; margin:4px auto 0; padding:4px 14px; border-radius:8px;'> {waste_rate:.1f}% </div>",
-            unsafe_allow_html=True
-        )
+        render_rate_pill("총실적대비", waste_rate, "#b45309")
+
+    col5, col6, col7 = st.columns(3)
+    with col5:
+        st.metric("45일 수주 부족(스냅샷)\n(pcs)", f"{shortage_snapshot:,}", delta=None, delta_color="off")
+        if shortage_snapshot_date is not None:
+            st.caption(f"기준일: {shortage_snapshot_date}")
+
+    with col6:
+        st.metric("필요수량(스냅샷)\n(pcs)", f"{demand_total:,}", delta=None, delta_color="off")
+        st.caption("= 수요대응생산량 + 45일 부족(스냅샷)")
+
+    with col7:
+        backlog_text = "-" if backlog_days is None else f"{backlog_days:.1f}"
+        st.metric("백로그 해소 추정\n(일)", backlog_text, delta=None, delta_color="off")
+        st.caption(f"일평균 수요대응: {avg_valid_per_day:,.0f} pcs/일 (선택기간 {prod_days}일)")
 
     st.caption(
         "수요 대응 생산량: 수요 기준에 따라 실제로 활용 가능한 생산량  \n"
         "선행 확보 생산량: 향후 수요 대응을 위해 선제적으로 확보된 생산량  \n"
-        "비계획 생산량: 현재 수요 기준에 포함되지 않은 생산량"
+        "비계획 생산량: 현재 수요 기준에 포함되지 않은 생산량  \n"
+        "수요충족률(45일부족기준): 필요수량(= 수요대응생산량 + 45일 수주 기준 부족수량[스냅샷]) 대비 수요 대응 생산량 비율"
     )
+    if shortage_snapshot_date is not None:
+        st.caption(
+            f"참고: 총부족수량은 45일 수주 기준 값(스냅샷)이라 기간 합계로 더하면 중복될 수 있어, "
+            f"상단/공장별 충족률은 최신일({shortage_snapshot_date}) 스냅샷을 사용합니다."
+        )
 
     st.markdown("<div style='margin-top:50px'></div>", unsafe_allow_html=True)
     # ============== 중간: 차트 ==============
@@ -232,16 +284,34 @@ try:
         )
         metric_desc = {
             "수요대응율(총실적대비)": "총 생산량(실적) 중 수요 대응 생산량이 차지하는 비중",
-            "수요충족률(필요대비)": "필요수량(= 수요대응생산량 + 부족수량) 대비 수요 대응 생산량 비율",
+            "수요충족률(필요대비)": "필요수량(= 수요대응생산량 + 45일 수주 기준 부족수량[스냅샷]) 대비 수요 대응 생산량 비율",
             "선행확보율": "향후 대응을 위한 선제 생산 비율",
             "비계획율": "수요 기준에 포함되지 않은 생산 비율",
         }
         st.caption(f"설명: {metric_desc[metric_option]}")
 
         # 공장별 추가 지표 (필요대비)
-        factory_data["필요수량"] = (factory_data["유효생산량"] + factory_data["총부족수량"]).fillna(0)
+        # NOTE: 기간 내 '총부족수량' 합계는 중복 집계가 될 수 있어, 공장별 최신일(스냅샷) 기준으로 사용합니다.
+        factory_short_snapshot = factory_summary_filtered.dropna(subset=["생산일자_date"]).copy()
+        if len(factory_short_snapshot) > 0:
+            idx = factory_short_snapshot.groupby("공장")["생산일자_date"].idxmax()
+            short_snap = factory_short_snapshot.loc[idx, ["공장", "총부족수량", "생산일자_date"]].rename(
+                columns={"총부족수량": "부족수량(스냅샷)", "생산일자_date": "부족기준일"}
+            )
+        else:
+            short_snap = pd.DataFrame(columns=["공장", "부족수량(스냅샷)", "부족기준일"])
+        factory_data = factory_data.merge(short_snap, on="공장", how="left")
+        factory_data["부족수량(스냅샷)"] = factory_data["부족수량(스냅샷)"].fillna(0)
+
+        factory_data["필요수량"] = (factory_data["유효생산량"] + factory_data["부족수량(스냅샷)"]).fillna(0)
         factory_data["수요충족률(%)"] = (factory_data["유효생산량"] / factory_data["필요수량"] * 100).fillna(0)
-        factory_data["부족률(%)"] = (factory_data["총부족수량"] / factory_data["필요수량"] * 100).fillna(0)
+        factory_data["부족률(%)"] = (factory_data["부족수량(스냅샷)"] / factory_data["필요수량"] * 100).fillna(0)
+        # 백로그 해소 추정(일) = 부족(스냅샷) / (선택기간 일평균 수요대응 생산량)
+        prod_days_factory = int(factory_summary_filtered["생산일자_date"].nunique()) if len(factory_summary_filtered) > 0 else 0
+        factory_data["일평균수요대응(pcs/일)"] = (factory_data["유효생산량"] / prod_days_factory).fillna(0) if prod_days_factory > 0 else 0
+        factory_data["백로그해소추정(일)"] = (
+            factory_data["부족수량(스냅샷)"] / factory_data["일평균수요대응(pcs/일)"]
+        ).where(factory_data["일평균수요대응(pcs/일)"] > 0)
 
         metric_map = {
             "수요대응율(총실적대비)": ("유효비율(%)", "유효생산량"),
@@ -262,12 +332,14 @@ try:
             hover_data={
                 "총실적": ":,",
                 "필요수량": ":,",
-                "총부족수량": ":,",
+                "부족수량(스냅샷)": ":,",
                 "유효생산량": ":,",
                 "과생산량": ":,",
                 "불필요생산량": ":,",
                 "수요충족률(%)": ":.1f",
                 "부족률(%)": ":.1f",
+                "일평균수요대응(pcs/일)": ":,.0f",
+                "백로그해소추정(일)": ":.1f",
                 "선택지표": ":.1f",
             },
         )
@@ -291,7 +363,7 @@ try:
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown(f"**선택 지표: {metric_option} (%)**")
-        st.caption("Tip: 필요수량(= 수요대응생산량 + 부족수량)은 기간/제품믹스에 따라 크게 달라질 수 있어, '수요대응율(총실적대비)'만 보지 말고 '수요충족률(필요대비)'도 같이 확인하는 것이 안전합니다.")
+        st.caption("Tip: 필요수량은 '45일 수주 기준 부족수량(스냅샷)'을 포함하므로, '수요대응율(총실적대비)'만 보지 말고 '수요충족률(필요대비)'도 같이 확인하는 것이 안전합니다.")
 
         # 공장_신규분류별 통합 현황
         combined_summary = factory_summary_filtered.groupby(["공장", "신규분류요약"], dropna=False).agg({
@@ -302,11 +374,23 @@ try:
             "불필요생산량": "sum"
         }).reset_index()
 
+        # 분류별 부족수량도 최신일(스냅샷) 기준으로 별도 계산
+        combined_short_snapshot = factory_summary_filtered.dropna(subset=["생산일자_date"]).copy()
+        if len(combined_short_snapshot) > 0:
+            idx = combined_short_snapshot.groupby(["공장", "신규분류요약"])["생산일자_date"].idxmax()
+            short_snap = combined_short_snapshot.loc[idx, ["공장", "신규분류요약", "총부족수량", "생산일자_date"]].rename(
+                columns={"총부족수량": "부족수량(스냅샷)", "생산일자_date": "부족기준일"}
+            )
+        else:
+            short_snap = pd.DataFrame(columns=["공장", "신규분류요약", "부족수량(스냅샷)", "부족기준일"])
+        combined_summary = combined_summary.merge(short_snap, on=["공장", "신규분류요약"], how="left")
+        combined_summary["부족수량(스냅샷)"] = combined_summary["부족수량(스냅샷)"].fillna(0)
+
         # 비율 계산
         combined_summary["유효비율(%)"] = (combined_summary["유효생산량"] / combined_summary["총실적"] * 100).fillna(0)
         combined_summary["과생산비율(%)"] = (combined_summary["과생산량"] / combined_summary["총실적"] * 100).fillna(0)
         combined_summary["불필요비율(%)"] = (combined_summary["불필요생산량"] / combined_summary["총실적"] * 100).fillna(0)
-        combined_summary["필요수량"] = (combined_summary["유효생산량"] + combined_summary["총부족수량"]).fillna(0)
+        combined_summary["필요수량"] = (combined_summary["유효생산량"] + combined_summary["부족수량(스냅샷)"]).fillna(0)
         combined_summary["수요충족률(%)"] = (combined_summary["유효생산량"] / combined_summary["필요수량"] * 100).fillna(0)
 
         # 선택지표 추가
@@ -322,12 +406,12 @@ try:
         # 테이블 표시
         base_cols = ["공장", "신규분류요약", "총실적"]
         if metric_option == "수요충족률(필요대비)":
-            display_combined = combined_summary[base_cols + ["필요수량", "총부족수량", pcs_col, "선택지표"]].copy()
+            display_combined = combined_summary[base_cols + ["필요수량", "부족수량(스냅샷)", pcs_col, "선택지표"]].copy()
         else:
             display_combined = combined_summary[base_cols + [pcs_col, "선택지표"]].copy()
         total_hdr = f"{KPI_LABEL_MAP['총실적']} (pcs)"
         demand_hdr = "필요수량 (pcs)"
-        shortage_hdr = f"{KPI_LABEL_MAP['총부족수량']} (pcs)"
+        shortage_hdr = f"{KPI_LABEL_MAP['총부족수량']} (pcs,스냅샷)"
         pcs_hdr = f"{KPI_LABEL_MAP[pcs_col]} (pcs)"
         rate_hdr = f"{metric_option} (%)"
         if metric_option == "수요충족률(필요대비)":
