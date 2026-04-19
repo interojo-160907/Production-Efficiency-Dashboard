@@ -12,7 +12,7 @@ import plotly.express as px
 DASHBOARD_TITLE = "생산 운영 현황 대시보드"
 KPI_LABEL_MAP = {
     "총실적": "총 생산량",
-    "총부족수량": "미충족 수요",
+    "총부족수량": "필요 수량",
     "유효생산량": "정확 대응 생산량",
     "과생산량": "초과 생산량",
     "불필요생산량": "비정형 생산량",
@@ -222,15 +222,8 @@ try:
     valid_prod = int(daily_summary_filtered["유효생산량"].sum()) if len(daily_summary_filtered) > 0 else 0
     over_prod = int(daily_summary_filtered["과생산량"].sum()) if len(daily_summary_filtered) > 0 else 0
     waste_prod = int(daily_summary_filtered["불필요생산량"].sum()) if len(daily_summary_filtered) > 0 else 0
-    # NOTE: '총부족수량(=미충족 수요)'이 45일 수주 기준 스냅샷이라면 기간 합계(sum)는 중복 집계가 될 수 있어,
-    # 선택 기간의 "마지막 날짜" 기준 스냅샷을 사용합니다.
-    if len(daily_summary_filtered) > 0:
-        daily_last = daily_summary_filtered.sort_values("날짜_date").iloc[-1]
-        shortage_snapshot = int(daily_last["총부족수량"])
-        shortage_snapshot_date = daily_last["날짜_date"]
-    else:
-        shortage_snapshot = 0
-        shortage_snapshot_date = None
+    # NOTE: '총부족수량'은 운영상 "필요 수량"으로 사용합니다. (선택 기간 합계)
+    need_qty_total = int(daily_summary_filtered["총부족수량"].sum()) if len(daily_summary_filtered) > 0 else 0
 
     prod_days = int(daily_summary_filtered["날짜_date"].nunique()) if len(daily_summary_filtered) > 0 else 0
 
@@ -238,9 +231,9 @@ try:
     over_rate = (over_prod / total_prod * 100) if total_prod > 0 else 0
     waste_rate = (waste_prod / total_prod * 100) if total_prod > 0 else 0
 
-    # 규격 대응률(부족SKU 기준): "그날 생산한 SKU" 중 "그날 부족 SKU였던 SKU" 비율
-    # - 사용자 정의: (일자별 부족 SKU ∩ 일자별 생산 SKU) / 일자별 생산 SKU
-    # - 이 지표를 정확히 계산하려면 '부족 SKU' 데이터에도 반드시 제품코드(SKU)가 포함되어야 합니다.
+    # 규격 대응률(필요SKU 기준): "그날 생산한 SKU" 중 "그날 필요(수요)가 있던 SKU" 비율
+    # - 사용자 정의: (일자별 필요 SKU ∩ 일자별 생산 SKU) / 일자별 생산 SKU
+    # - 이 지표를 정확히 계산하려면 '필요 SKU' 데이터에도 반드시 제품코드(SKU)가 포함되어야 합니다.
     shortage_prod_daily = None
     shortage_prod_rate = None
     produced_skus_total = 0
@@ -256,15 +249,16 @@ try:
                 if col in match_filtered.columns:
                     match_filtered[col] = pd.to_numeric(match_filtered[col], errors="coerce").fillna(0)
 
-            # 정확한 규격 대응률을 위해: 부족 SKU(부족수량>0)에도 제품코드가 반드시 필요
-            missing_shortage_sku = match_filtered[
-                (match_filtered.get("부족수량", 0) > 0) & (match_filtered["제품코드"].isna())
+            # 정확한 규격 대응률을 위해: 필요 SKU(유효생산량+부족수량>0)에도 제품코드가 반드시 필요
+            missing_need_sku = match_filtered[
+                ((match_filtered.get("유효생산량", 0) + match_filtered.get("부족수량", 0)) > 0)
+                & (match_filtered["제품코드"].isna())
             ]
-            if len(missing_shortage_sku) > 0:
+            if len(missing_need_sku) > 0:
                 st.error(
-                    "규격 대응률 계산 불가: `매칭결과` 시트에서 `부족수량>0` 인 행에 `제품코드`가 비어 있습니다. "
-                    f"(선택 기간 내 {len(missing_shortage_sku):,}행) "
-                    "부족 데이터에 SKU(제품코드)를 포함하도록 `유효생산량_결과.xlsx` 생성 로직을 수정하세요."
+                    "규격 대응률 계산 불가: `매칭결과` 시트에서 `유효생산량+부족수량>0` 인 행에 `제품코드`가 비어 있습니다. "
+                    f"(선택 기간 내 {len(missing_need_sku):,}행) "
+                    "필요(수요) 데이터에 SKU(제품코드)를 포함하도록 `유효생산량_결과.xlsx` 생성 로직을 수정하세요."
                 )
             else:
                 # 일자·SKU 단위로 생산/부족을 합산해 플래그 생성
@@ -272,90 +266,92 @@ try:
                 if len(sku_level) > 0:
                     by_day_sku = sku_level.groupby(["날짜_date", "제품코드"], dropna=False).agg(
                         prod_qty=("양품수량", "sum"),
+                        valid_qty=("유효생산량", "sum"),
                         shortage_qty=("부족수량", "sum"),
                     ).reset_index()
                     by_day_sku["produced_flag"] = by_day_sku["prod_qty"] > 0
-                    by_day_sku["shortage_flag"] = by_day_sku["shortage_qty"] > 0
+                    by_day_sku["_need_qty"] = (by_day_sku["valid_qty"] + by_day_sku["shortage_qty"]).fillna(0)
+                    by_day_sku["need_flag"] = by_day_sku["_need_qty"] > 0
 
-                    # 규격 대응률(부족SKU 기준): 생산 SKU 중 부족 SKU 비중
+                    # 규격 대응률(필요SKU 기준): 생산 SKU 중 필요 SKU 비중
                     shortage_prod_daily = (
                         by_day_sku[by_day_sku["produced_flag"]]
                         .groupby("날짜_date", dropna=False)
                         .agg(
                             생산SKU수=("제품코드", "nunique"),
-                            부족대응SKU수=("shortage_flag", "sum"),
+                            필요대응SKU수=("need_flag", "sum"),
                         )
                         .reset_index()
                     )
                     shortage_prod_daily["규격대응률(%)"] = np.where(
                         shortage_prod_daily["생산SKU수"] > 0,
-                        shortage_prod_daily["부족대응SKU수"] / shortage_prod_daily["생산SKU수"] * 100,
+                        shortage_prod_daily["필요대응SKU수"] / shortage_prod_daily["생산SKU수"] * 100,
                         0,
                     )
                     shortage_prod_daily = shortage_prod_daily.sort_values("날짜_date").reset_index(drop=True)
                     produced_skus_total = int(shortage_prod_daily["생산SKU수"].sum())
-                    shortage_responded_skus_total = int(shortage_prod_daily["부족대응SKU수"].sum())
+                    shortage_responded_skus_total = int(shortage_prod_daily["필요대응SKU수"].sum())
                     shortage_prod_rate = (
                         shortage_responded_skus_total / produced_skus_total * 100
                         if produced_skus_total > 0
                         else None
                     )
 
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
+    col_left, col_right = st.columns([2.2, 1.2])
+    with col_left:
         render_kpi_card(
             f"{KPI_LABEL_MAP['총실적']} (pcs)",
             f"{total_prod:,}",
-            right_label="규격 대응률" if shortage_prod_rate is not None else "유효 대응률(수량)",
-            right_value=shortage_prod_rate if shortage_prod_rate is not None else valid_rate,
-            right_color="#1d4ed8",
             sub=f"선택기간 `{prod_days}`일",
         )
+    with col_right:
+        spec_value = f"{shortage_prod_rate:.1f}%" if shortage_prod_rate is not None else "-"
+        spec_sub = "일자별 (필요 SKU ∩ 생산 SKU) / 생산 SKU"
+        if shortage_prod_rate is None:
+            spec_sub = "계산 불가: `매칭결과` 시트에 필요/부족 행의 `제품코드`가 필요합니다."
+        render_kpi_card(
+            "규격 대응률 (%)",
+            f"<span style='color:#1d4ed8'>{spec_value}</span>",
+            sub=spec_sub,
+        )
+
+    col2, col3, col4 = st.columns(3)
     with col2:
         render_kpi_card(
-            f"{KPI_LABEL_MAP['유효생산량']} (pcs)",
-            f"{valid_prod:,}",
-            right_label=RATE_LABEL_MAP["유효비율(%)"].replace("(%)", ""),
-            right_value=valid_rate,
-            right_color="#047857",
-            sub=f"{KPI_LABEL_MAP['총실적']} 대비",
+            "정확 대응 비중",
+            f"<span style='color:#047857'>{valid_rate:.1f}%</span>",
+            sub=f"{KPI_LABEL_MAP['유효생산량']}: {valid_prod:,} pcs",
         )
     with col3:
         render_kpi_card(
-            f"{KPI_LABEL_MAP['과생산량']} (pcs)",
-            f"{over_prod:,}",
-            right_label=RATE_LABEL_MAP["과생산비율(%)"].replace("(%)", ""),
-            right_value=over_rate,
-            right_color="#b91c1c",
-            sub=f"{KPI_LABEL_MAP['총실적']} 대비",
+            "초과 생산 비중",
+            f"<span style='color:#b91c1c'>{over_rate:.1f}%</span>",
+            sub=f"{KPI_LABEL_MAP['과생산량']}: {over_prod:,} pcs",
         )
     with col4:
         render_kpi_card(
-            f"{KPI_LABEL_MAP['불필요생산량']} (pcs)",
-            f"{waste_prod:,}",
-            right_label=RATE_LABEL_MAP["불필요비율(%)"].replace("(%)", ""),
-            right_value=waste_rate,
-            right_color="#b45309",
-            sub=f"{KPI_LABEL_MAP['총실적']} 대비",
+            "비정형 생산 비중",
+            f"<span style='color:#b45309'>{waste_rate:.1f}%</span>",
+            sub=f"{KPI_LABEL_MAP['불필요생산량']}: {waste_prod:,} pcs",
         )
 
     with st.expander("지표 정의/상세 보기", expanded=False):
         st.markdown(
-            "- `필요 수량(SKU)` : 해당 기간 실제 필요한 SKU 수량(불필요 SKU 제외)\n"
+            "- `총 생산량` : 선택 기간의 총 생산 수량\n"
+            "- `필요 수량` : 선택 기간의 총 필요(수요) 수량\n"
+            "- `규격 대응률` : 일자별 `(필요 SKU ∩ 생산 SKU) ÷ 생산 SKU` 의 비율\n"
             "- `정확 대응 생산량` : SKU별 `min(생산, 필요)`의 합\n"
+            "- `정확 대응 비중` : `정확 대응 생산량` ÷ `총 생산량`\n"
             "- `초과 생산량` : SKU별 `max(생산-필요, 0)`의 합\n"
+            "- `초과 생산 비중` : `초과 생산량` ÷ `총 생산량`\n"
             "- `비정형 생산량` : 필요 SKU 외 생산(필요=0인데 생산>0)\n"
-            "- `유효 대응률(수량)` = `정확 대응 생산량` ÷ `총 생산량`\n"
-            "- `규격 대응률` = (일자별 부족 SKU ∩ 일자별 생산 SKU) ÷ 일자별 생산 SKU\n"
-            "- 참고: `미충족 수요`는 45일 수주 기준 스냅샷 값으로 운영 참고용입니다."
+            "- `비정형 생산 비중` : `비정형 생산량` ÷ `총 생산량`"
         )
-        st.write(f"- 선택기간 종료일 `미충족 수요`(스냅샷): `{shortage_snapshot:,}` pcs")
-        if shortage_snapshot_date is not None:
-            st.write(f"- 미충족 수요 기준일: `{shortage_snapshot_date}`")
+        st.write(f"- 선택기간 `필요 수량`(합계): `{need_qty_total:,}` pcs")
         if shortage_prod_rate is not None:
-            st.markdown("**규격 대응률(부족SKU 기준)**")
+            st.markdown("**규격 대응률(필요SKU 기준)**")
             st.write(f"- 생산 SKU 수(일자 합산): `{produced_skus_total:,}`")
-            st.write(f"- 부족 대응 SKU 수(일자 합산): `{shortage_responded_skus_total:,}`")
+            st.write(f"- 필요 대응 SKU 수(일자 합산): `{shortage_responded_skus_total:,}`")
             st.write(f"- 규격 대응률: `{shortage_prod_rate:.1f}` %")
             if shortage_prod_daily is not None and len(shortage_prod_daily) > 0:
                 with st.expander("일자별 규격 대응(표)", expanded=False):
@@ -366,7 +362,7 @@ try:
                         shortage_view.style.format(
                             {
                                 "생산SKU수": "{:,.0f}",
-                                "부족대응SKU수": "{:,.0f}",
+                                "필요대응SKU수": "{:,.0f}",
                                 "규격대응률(%)": "{:.1f}%",
                             }
                         ),
@@ -398,7 +394,7 @@ try:
             margin=dict(l=10, r=10, t=40, b=10),
             yaxis=dict(range=[0, 100], title="규격 대응률 (%)"),
             xaxis=dict(title="날짜"),
-            title="일자별 (부족 SKU ∩ 생산 SKU) / 생산 SKU",
+            title="일자별 (필요 SKU ∩ 생산 SKU) / 생산 SKU",
         )
         st.plotly_chart(fig_spec, use_container_width=True)
 
@@ -424,7 +420,7 @@ try:
         # 공장별 KPI (정확도 기반)
         factory_data["유효 대응률(수량)(%)"] = factory_data["유효비율(%)"]
 
-        # 공장별 SKU 대응률(규격): 필요 SKU 중 생산이 1이라도 발생한 SKU 비율
+        # 공장별 규격 대응률: 필요 SKU 중 생산이 1이라도 발생한 SKU 비율
         sku_coverage_available = False
         if matching_result is not None and {"공장", "제품코드", "양품수량", "부족수량", "유효생산량", "날짜_date"}.issubset(set(matching_result.columns)):
             match_factory = matching_result[
@@ -454,28 +450,33 @@ try:
                     )
                     sku_rate = sku_needed.merge(sku_responded, on="공장", how="left")
                     sku_rate["대응 SKU 수"] = sku_rate["대응 SKU 수"].fillna(0)
-                    sku_rate["SKU 대응률(%)"] = np.where(
+                    sku_rate["규격대응률(%)"] = np.where(
                         sku_rate["필요 SKU 수"] > 0,
                         sku_rate["대응 SKU 수"] / sku_rate["필요 SKU 수"] * 100,
                         0,
                     )
                     factory_data = factory_data.merge(
-                        sku_rate[["공장", "필요 SKU 수", "대응 SKU 수", "SKU 대응률(%)"]],
+                        sku_rate[["공장", "필요 SKU 수", "대응 SKU 수", "규격대응률(%)"]],
                         on="공장",
                         how="left",
                     )
                     factory_data["필요 SKU 수"] = factory_data["필요 SKU 수"].fillna(0)
                     factory_data["대응 SKU 수"] = factory_data["대응 SKU 수"].fillna(0)
-                    factory_data["SKU 대응률(%)"] = factory_data["SKU 대응률(%)"].replace([np.inf, -np.inf], 0).fillna(0)
+                    factory_data["규격대응률(%)"] = factory_data["규격대응률(%)"].replace([np.inf, -np.inf], 0).fillna(0)
                     sku_coverage_available = True
 
+        metric_choices = (["규격 대응률"] if sku_coverage_available else []) + [
+            "정확 대응 비중",
+            "초과 생산 비중",
+            "비정형 생산 비중",
+        ]
         metric_option = st.radio(
             "공장 비교 지표",
-            (["SKU 대응률(규격)"] if sku_coverage_available else []) + ["정확 대응 비중", "초과 생산 비중", "비정형 생산 비중"],
+            metric_choices,
             horizontal=True,
         )
         metric_desc = {
-            "SKU 대응률(규격)": "필요 SKU 중 생산이 1이라도 발생한 SKU 비율(수량 부족해도 대응으로 카운트)",
+            "규격 대응률": "필요 SKU 중 생산이 1이라도 발생한 SKU 비율(수량 부족해도 대응으로 카운트)",
             "정확 대응 비중": "총 생산량 중 정확 대응 생산량이 차지하는 비중",
             "초과 생산 비중": "총 생산량 중 초과 생산량이 차지하는 비중",
             "비정형 생산 비중": "총 생산량 중 비정형 생산량이 차지하는 비중",
@@ -483,7 +484,7 @@ try:
         st.caption(f"설명: {metric_desc[metric_option]}")
 
         metric_map = {
-            "SKU 대응률(규격)": ("SKU 대응률(%)", "유효생산량"),
+            "규격 대응률": ("규격대응률(%)", "유효생산량"),
             "정확 대응 비중": ("유효비율(%)", "유효생산량"),
             "초과 생산 비중": ("과생산비율(%)", "과생산량"),
             "비정형 생산 비중": ("불필요비율(%)", "불필요생산량"),
@@ -498,7 +499,7 @@ try:
             "불필요생산량": ":,",
             "필요 SKU 수": ":,",
             "대응 SKU 수": ":,",
-            "SKU 대응률(%)": ":.1f",
+            "규격대응률(%)": ":.1f",
             "유효비율(%)": ":.1f",
             "과생산비율(%)": ":.1f",
             "불필요비율(%)": ":.1f",
@@ -536,9 +537,9 @@ try:
 
         st.markdown(f"**선택 지표: {metric_option} (%)**")
         if sku_coverage_available:
-            st.caption("Tip: `SKU 대응률(규격)`은 필요 SKU 대비 생산 발생 SKU 비율입니다. 수량이 부족해도 생산이 1이라도 있으면 대응으로 카운트합니다.")
+            st.caption("Tip: `규격 대응률`은 필요 SKU 대비 생산 발생 SKU 비율입니다. 수량이 부족해도 생산이 1이라도 있으면 대응으로 카운트합니다.")
         else:
-            st.caption("Tip: 공장별 SKU 대응률(규격)은 `매칭결과` 시트에 `공장`/`제품코드`가 있어야 계산 가능합니다. 현재 파일은 공장 정보가 없어 전사 기준 ‘일자별 규격 대응 현황’만 제공합니다.")
+            st.caption("Tip: 공장별 `규격 대응률`은 `매칭결과` 시트에 `공장`/`제품코드`가 있어야 계산 가능합니다. 현재 파일은 공장 정보가 없어 전사 기준 ‘일자별 규격 대응 현황’만 제공합니다.")
 
         # 공장_신규분류별 통합 현황
         combined_metric_option = metric_option if metric_option in {"정확 대응 비중", "초과 생산 비중", "비정형 생산 비중"} else "정확 대응 비중"
@@ -632,27 +633,71 @@ try:
     st.markdown("### 📊 일별 요약")
 
     daily_display = daily_summary_filtered[
-        ["날짜", "총실적", "총부족수량", "유효생산량", "과생산량", "불필요생산량", "유효비율(%)", "과생산비율(%)", "불필요비율(%)"]
+        [
+            "날짜",
+            "날짜_date",
+            "총실적",
+            "총부족수량",
+            "유효생산량",
+            "과생산량",
+            "불필요생산량",
+            "유효비율(%)",
+            "과생산비율(%)",
+            "불필요비율(%)",
+        ]
     ].copy()
+
+    # 일자별 규격 대응률(가능한 경우) 병합
+    if shortage_prod_daily is not None and len(shortage_prod_daily) > 0:
+        spec_rate = shortage_prod_daily[["날짜_date", "규격대응률(%)"]].copy()
+        daily_display = daily_display.merge(spec_rate, on="날짜_date", how="left")
+        daily_display["규격대응률(%)"] = daily_display["규격대응률(%)"].fillna(0)
+
     # 날짜는 일자까지만 표시 (시간 제거)
     daily_display["날짜"] = daily_display["날짜"].dt.strftime("%Y-%m-%d")
+
     # pcs 컬럼은 콤마 표시 및 컬럼명에 (pcs) 추가
     pcs_cols = ["총실적", "총부족수량", "유효생산량", "과생산량", "불필요생산량"]
     daily_display.rename(
         columns={c: f"{KPI_LABEL_MAP.get(c, c)} (pcs)" for c in pcs_cols},
         inplace=True,
     )
+    if "규격대응률(%)" in daily_display.columns:
+        daily_display.rename(columns={"규격대응률(%)": "규격 대응률(%)"}, inplace=True)
     daily_display.rename(columns=RATE_LABEL_MAP, inplace=True)
 
+    # 컬럼 순서 정리
+    daily_cols = [
+        "날짜",
+        f"{KPI_LABEL_MAP['총실적']} (pcs)",
+        f"{KPI_LABEL_MAP['총부족수량']} (pcs)",
+    ]
+    if "규격 대응률(%)" in daily_display.columns:
+        daily_cols.append("규격 대응률(%)")
+    daily_cols.extend(
+        [
+            f"{KPI_LABEL_MAP['유효생산량']} (pcs)",
+            f"{KPI_LABEL_MAP['과생산량']} (pcs)",
+            f"{KPI_LABEL_MAP['불필요생산량']} (pcs)",
+            RATE_LABEL_MAP["유효비율(%)"],
+            RATE_LABEL_MAP["과생산비율(%)"],
+            RATE_LABEL_MAP["불필요비율(%)"],
+        ]
+    )
+    daily_display = daily_display[daily_cols].copy()
+
     st.dataframe(
-        daily_display.style.format({
-            **{f"{KPI_LABEL_MAP.get(c, c)} (pcs)": "{:,.0f}" for c in pcs_cols},
-            RATE_LABEL_MAP["유효비율(%)"]: "{:.1f}%",
-            RATE_LABEL_MAP["과생산비율(%)"]: "{:.1f}%",
-            RATE_LABEL_MAP["불필요비율(%)"]: "{:.1f}%",
-        }),
+        daily_display.style.format(
+            {
+                **{f"{KPI_LABEL_MAP.get(c, c)} (pcs)": "{:,.0f}" for c in pcs_cols},
+                **({"규격 대응률(%)": "{:.1f}%"} if "규격 대응률(%)" in daily_display.columns else {}),
+                RATE_LABEL_MAP["유효비율(%)"]: "{:.1f}%",
+                RATE_LABEL_MAP["과생산비율(%)"]: "{:.1f}%",
+                RATE_LABEL_MAP["불필요비율(%)"]: "{:.1f}%",
+            }
+        ),
         use_container_width=True,
-        hide_index=True
+        hide_index=True,
     )
 
     with st.expander("🔎 관별(공장별) 일별 상세 펼치기", expanded=False):
