@@ -37,7 +37,7 @@ st.markdown("""
     .kpi-card {
         background-color: #f0f4f8;
         border-radius: 12px;
-        padding: 18px 20px;
+        padding: 16px 16px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         height: 100%;
     }
@@ -60,7 +60,7 @@ st.markdown("""
         white-space: nowrap;
     }
     .kpi-value {
-        font-size: 34px;
+        font-size: clamp(22px, 2.2vw, 34px);
         font-weight: 900;
         color: #111827;
         letter-spacing: 0.3px;
@@ -288,42 +288,41 @@ try:
                     need_responded_skus_total = float(shortage_prod_daily["필요대응SKU수"].sum())
                     shortage_prod_rate = (need_responded_skus_total / produced_skus_total * 100) if produced_skus_total > 0 else None
 
-    col_left, col_right = st.columns([2.2, 1.2])
-    with col_left:
+    col1, col2, col3, col4, col5 = st.columns([2.2, 1.3, 1.1, 1.1, 1.1])
+    with col1:
         render_kpi_card(
             f"{KPI_LABEL_MAP['총실적']} (pcs)",
             f"{total_prod:,}",
             sub=None,
         )
-    with col_right:
+    with col2:
         spec_value = f"{shortage_prod_rate:.1f}%" if shortage_prod_rate is not None else "-"
-        spec_sub = "일자별 (필요 SKU ∩ 생산 SKU) / 생산 SKU"
+        spec_sub = "일자별 (필요SKU∩생산SKU) / 생산SKU"
         if shortage_prod_rate is None:
-            spec_sub = "계산 불가: `매칭결과` 시트에 필요/부족 행의 `제품코드`가 필요합니다."
+            spec_sub = "계산 불가: 필요 행 `제품코드` 필요"
         render_kpi_card(
             "규격 대응률 (%)",
             f"<span style='color:#1d4ed8'>{spec_value}</span>",
             sub=spec_sub,
         )
 
-    col2, col3, col4 = st.columns(3)
-    with col2:
+    with col3:
         render_kpi_card(
             "정확 대응 비중",
             f"<span style='color:#047857'>{valid_rate:.1f}%</span>",
-            sub=f"{KPI_LABEL_MAP['유효생산량']}: {valid_prod:,} pcs",
-        )
-    with col3:
-        render_kpi_card(
-            "초과 생산 비중",
-            f"<span style='color:#b91c1c'>{over_rate:.1f}%</span>",
-            sub=f"{KPI_LABEL_MAP['과생산량']}: {over_prod:,} pcs",
+            sub=f"수량: {valid_prod:,} pcs",
         )
     with col4:
         render_kpi_card(
+            "초과 생산 비중",
+            f"<span style='color:#b91c1c'>{over_rate:.1f}%</span>",
+            sub=f"수량: {over_prod:,} pcs",
+        )
+    with col5:
+        render_kpi_card(
             "비정형 생산 비중",
             f"<span style='color:#b45309'>{waste_rate:.1f}%</span>",
-            sub=f"{KPI_LABEL_MAP['불필요생산량']}: {waste_prod:,} pcs",
+            sub=f"수량: {waste_prod:,} pcs",
         )
 
     with st.expander("지표 정의/상세 보기", expanded=False):
@@ -366,7 +365,6 @@ try:
         # - 정의: 기간 내 (공장, 신규분류요약) 단위로 집계했을 때,
         #   생산 규격 수 중 필요(유효생산량+총부족수량)>0 인 규격이 차지하는 비율
         spec_coverage_available = False
-        factory_data["규격대응률(%)"] = 0.0
         if {"공장", "신규분류요약", "총실적", "총부족수량", "유효생산량"}.issubset(set(factory_summary_filtered.columns)):
             spec_base = factory_summary_filtered.groupby(["공장", "신규분류요약"], dropna=False).agg(
                 total_prod=("총실적", "sum"),
@@ -407,8 +405,16 @@ try:
                 factory_data["필요대응규격수"] = factory_data["필요대응규격수"].fillna(0)
             else:
                 factory_data["필요대응규격수"] = 0
-            factory_data["규격대응률(%)"] = factory_data["규격대응률(%)"].replace([np.inf, -np.inf], 0).fillna(0)
             spec_coverage_available = True
+
+        if "규격대응률(%)" in factory_data.columns:
+            factory_data["규격대응률(%)"] = (
+                pd.to_numeric(factory_data["규격대응률(%)"], errors="coerce")
+                .replace([np.inf, -np.inf], 0)
+                .fillna(0)
+            )
+        else:
+            factory_data["규격대응률(%)"] = 0.0
 
         metric_choices = ["규격 대응률", "정확 대응 비중", "초과 생산 비중", "비정형 생산 비중"]
         metric_option = st.radio(
