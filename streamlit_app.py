@@ -8,7 +8,20 @@ import plotly.graph_objects as go
 import plotly.express as px
 
 # 페이지 설정
-st.set_page_config(page_title="APS 유효생산량 대시보드", layout="wide", initial_sidebar_state="collapsed")
+DASHBOARD_TITLE = "생산 운영 현황 대시보드"
+KPI_LABEL_MAP = {
+    "총실적": "총 생산량",
+    "유효생산량": "수요 대응 생산량",
+    "과생산량": "선행 확보 생산량",
+    "불필요생산량": "비계획 생산량",
+}
+RATE_LABEL_MAP = {
+    "유효비율(%)": "수요대응율(%)",
+    "과생산비율(%)": "선행확보율(%)",
+    "불필요비율(%)": "비계획율(%)",
+}
+
+st.set_page_config(page_title=DASHBOARD_TITLE, layout="wide", initial_sidebar_state="collapsed")
 
 # CSS 스타일링
 st.markdown("""
@@ -71,7 +84,7 @@ try:
     st.caption(f"기준 시각(KST): {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
 
     # 제목
-    st.markdown("<h1 style='text-align:center; color:#1f3a93; margin:0;'>🏭 APS 유효생산량 대시보드</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h1 style='text-align:center; color:#1f3a93; margin:0;'>🏭 {DASHBOARD_TITLE}</h1>", unsafe_allow_html=True)
 
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
@@ -134,7 +147,7 @@ try:
 
     with col1:
         st.metric(
-            "총실적\n(pcs)",
+            f"{KPI_LABEL_MAP['총실적']}\n(pcs)",
             f"{total_prod:,}",
             delta=None,
             delta_color="off"
@@ -143,7 +156,7 @@ try:
     with col2:
         valid_rate = (valid_prod / total_prod * 100) if total_prod > 0 else 0
         st.metric(
-            "유효생산량\n(pcs)",
+            f"{KPI_LABEL_MAP['유효생산량']}\n(pcs)",
             f"{valid_prod:,}",
             delta=None,
             delta_color="off"
@@ -156,7 +169,7 @@ try:
     with col3:
         over_rate = (over_prod / total_prod * 100) if total_prod > 0 else 0
         st.metric(
-            "과생산량\n(pcs)",
+            f"{KPI_LABEL_MAP['과생산량']}\n(pcs)",
             f"{over_prod:,}",
             delta=None,
             delta_color="off"
@@ -169,7 +182,7 @@ try:
     with col4:
         waste_rate = (waste_prod / total_prod * 100) if total_prod > 0 else 0
         st.metric(
-            "불필요생산수량\n(pcs)",
+            f"{KPI_LABEL_MAP['불필요생산량']}\n(pcs)",
             f"{waste_prod:,}",
             delta=None,
             delta_color="off"
@@ -178,6 +191,12 @@ try:
             f"<div style='display:inline-block; width:auto; text-align:center; font-size:32px; font-weight:900; color:#b45309; margin:4px auto 0; padding:4px 14px; border-radius:8px;'> {waste_rate:.1f}% </div>",
             unsafe_allow_html=True
         )
+
+    st.caption(
+        "수요 대응 생산량: 수요 기준에 따라 실제로 활용 가능한 생산량  \n"
+        "선행 확보 생산량: 향후 수요 대응을 위해 선제적으로 확보된 생산량  \n"
+        "비계획 생산량: 현재 수요 기준에 포함되지 않은 생산량"
+    )
 
     st.markdown("<div style='margin-top:50px'></div>", unsafe_allow_html=True)
     # ============== 중간: 차트 ==============
@@ -200,20 +219,20 @@ try:
 
         metric_option = st.radio(
             "표시할 지표를 선택하세요",
-            ["유효율", "과생산율", "불필요율"],
+            ["수요대응율", "선행확보율", "비계획율"],
             horizontal=True
         )
         metric_desc = {
-            "유효율": "해당일 필요수량 대비 유효하게 생산된 비율",
-            "과생산율": "해당일 필요수량을 초과해 추가 생산된 비율",
-            "불필요율": "해당일 필요수량 대비 불필요 규격이 생산된 비율"
+            "수요대응율": "해당 수요 대비 실제 대응된 생산 비율",
+            "선행확보율": "향후 대응을 위한 선제 생산 비율",
+            "비계획율": "수요 기준에 포함되지 않은 생산 비율",
         }
         st.caption(f"설명: {metric_desc[metric_option]}")
 
         metric_map = {
-            "유효율": ("유효비율(%)", "유효생산량"),
-            "과생산율": ("과생산비율(%)", "과생산량"),
-            "불필요율": ("불필요비율(%)", "불필요생산량")
+            "수요대응율": ("유효비율(%)", "유효생산량"),
+            "선행확보율": ("과생산비율(%)", "과생산량"),
+            "비계획율": ("불필요비율(%)", "불필요생산량"),
         }
         metric_col, pcs_col = metric_map[metric_option]
         factory_data["선택지표"] = factory_data[metric_col]
@@ -265,16 +284,19 @@ try:
 
         # 선택지표 추가
         metric_map = {
-            "유효율": ("유효비율(%)", "유효생산량"),
-            "과생산율": ("과생산비율(%)", "과생산량"),
-            "불필요율": ("불필요비율(%)", "불필요생산량")
+            "수요대응율": ("유효비율(%)", "유효생산량"),
+            "선행확보율": ("과생산비율(%)", "과생산량"),
+            "비계획율": ("불필요비율(%)", "불필요생산량"),
         }
         metric_col, pcs_col = metric_map[metric_option]
         combined_summary["선택지표"] = combined_summary[metric_col]
 
         # 테이블 표시
         display_combined = combined_summary[["공장", "신규분류요약", "총실적", pcs_col, "선택지표"]].copy()
-        display_combined.columns = ["공장", "신규분류요약", "총실적 (pcs)", f"{pcs_col} (pcs)", f"{metric_option} (%)"]
+        total_hdr = f"{KPI_LABEL_MAP['총실적']} (pcs)"
+        pcs_hdr = f"{KPI_LABEL_MAP[pcs_col]} (pcs)"
+        rate_hdr = f"{metric_option} (%)"
+        display_combined.columns = ["공장", "신규분류요약", total_hdr, pcs_hdr, rate_hdr]
 
         # 공장 순서 지정 (A관 > C관 > S관)
         factory_order = {"A관(1공장)": 1, "C관(2공장)": 2, "S관(3공장)": 3}
@@ -282,9 +304,9 @@ try:
         display_combined = display_combined.sort_values(["_factory_sort", "신규분류요약"]).reset_index(drop=True)
         display_combined = display_combined.drop("_factory_sort", axis=1)
 
-        display_combined["총실적 (pcs)"] = display_combined["총실적 (pcs)"].map("{:,.0f}".format)
-        display_combined[f"{pcs_col} (pcs)"] = display_combined[f"{pcs_col} (pcs)"].map("{:,.0f}".format)
-        display_combined[f"{metric_option} (%)"] = display_combined[f"{metric_option} (%)"].map("{:.1f}%".format)
+        display_combined[total_hdr] = display_combined[total_hdr].map("{:,.0f}".format)
+        display_combined[pcs_hdr] = display_combined[pcs_hdr].map("{:,.0f}".format)
+        display_combined[rate_hdr] = display_combined[rate_hdr].map("{:.1f}%".format)
 
         html = f"""
         <style>
@@ -296,16 +318,16 @@ try:
             .custom-table tbody tr:nth-child(even) {{ background: #f8fafc22; }}
         </style>
         <table class="custom-table">
-          <thead>
-            <tr>
-              <th>공장</th>
-              <th>신규분류요약</th>
-              <th>총실적 (pcs)</th>
-              <th>{pcs_col} (pcs)</th>
-              <th>{metric_option} (%)</th>
-            </tr>
-          </thead>
-          <tbody>
+           <thead>
+             <tr>
+               <th>공장</th>
+               <th>신규분류요약</th>
+              <th>{total_hdr}</th>
+              <th>{pcs_hdr}</th>
+              <th>{rate_hdr}</th>
+             </tr>
+           </thead>
+           <tbody>
         """
 
         grouped = display_combined.groupby("공장", sort=False)
@@ -316,9 +338,9 @@ try:
                 if idx == group.index[0]:
                     html += f"<td rowspan='{rowspan}' style='vertical-align: middle; font-weight: 600;'>{factory_name}</td>"
                 html += f"<td>{row['신규분류요약']}</td>"
-                html += f"<td class='number'>{row['총실적 (pcs)']}</td>"
-                html += f"<td class='number'>{row[f'{pcs_col} (pcs)']}</td>"
-                html += f"<td class='number'>{row[f'{metric_option} (%)']}</td>"
+                html += f"<td class='number'>{row[total_hdr]}</td>"
+                html += f"<td class='number'>{row[pcs_hdr]}</td>"
+                html += f"<td class='number'>{row[rate_hdr]}</td>"
                 html += "</tr>"
         html += "</tbody></table>"
         st.markdown(html, unsafe_allow_html=True)
@@ -331,12 +353,16 @@ try:
     daily_display["날짜"] = daily_display["날짜"].dt.strftime("%Y-%m-%d")
     # pcs 컬럼은 콤마 표시 및 컬럼명에 (pcs) 추가
     pcs_cols = ["총실적", "총부족수량", "유효생산량", "과생산량", "불필요생산량"]
-    daily_display.rename(columns={c: f"{c} (pcs)" for c in pcs_cols}, inplace=True)
+    daily_display.rename(
+        columns={c: f"{KPI_LABEL_MAP.get(c, c)} (pcs)" for c in pcs_cols},
+        inplace=True,
+    )
+    daily_display.rename(columns=RATE_LABEL_MAP, inplace=True)
 
     st.dataframe(
         daily_display.style.format({
-            **{f"{c} (pcs)": "{:,.0f}" for c in pcs_cols},
-            "유효비율(%)": "{:.1f}%"
+            **{f"{KPI_LABEL_MAP.get(c, c)} (pcs)": "{:,.0f}" for c in pcs_cols},
+            RATE_LABEL_MAP["유효비율(%)"]: "{:.1f}%",
         }),
         use_container_width=True,
         hide_index=True
