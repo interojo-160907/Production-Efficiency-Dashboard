@@ -107,30 +107,35 @@ def render_kpi_card(title: str, value: str, right_label: str | None = None, righ
     )
 
 @st.cache_data(show_spinner=False)
-def load_result_excel(result_path: Path, mtime_ns: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_result_excel(result_path: Path, mtime_ns: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """결과 엑셀 파일 로드 + 전처리 (Streamlit 캐시 적용)
 
     - 위젯 변경 시 전체 스크립트가 rerun 되므로, 엑셀 로딩/전처리를 캐시해 속도를 개선합니다.
     - mtime_ns는 파일 변경 시 캐시 무효화를 위해 사용됩니다.
     """
     _ = mtime_ns  # cache key only
-    sheets = pd.read_excel(result_path, sheet_name=["일별요약", "공장_신규분류별"])
+    sheets = pd.read_excel(result_path, sheet_name=["매칭결과", "일별요약", "공장_신규분류별"])
 
-    required = {"일별요약", "공장_신규분류별"}
+    required = {"매칭결과", "일별요약", "공장_신규분류별"}
     missing = required - set(sheets.keys())
     if missing:
         raise ValueError(f"결과 엑셀에 필요한 시트가 없습니다: {', '.join(missing)}")
 
+    matching_result = sheets["매칭결과"]
     daily_summary = sheets["일별요약"]
     factory_summary = sheets["공장_신규분류별"]
 
+    matching_result["날짜"] = pd.to_datetime(matching_result["날짜"], errors="coerce")
+    matching_result["생산일자"] = pd.to_datetime(matching_result["생산일자"], errors="coerce")
     daily_summary["날짜"] = pd.to_datetime(daily_summary["날짜"], errors="coerce")
     factory_summary["생산일자"] = pd.to_datetime(factory_summary["생산일자"], errors="coerce")
 
+    matching_result["날짜_date"] = matching_result["날짜"].dt.date
+    matching_result["생산일자_date"] = matching_result["생산일자"].dt.date
     daily_summary["날짜_date"] = daily_summary["날짜"].dt.date
     factory_summary["생산일자_date"] = factory_summary["생산일자"].dt.date
 
-    return daily_summary, factory_summary
+    return matching_result, daily_summary, factory_summary
 
 
 # 결과 파일 경로
@@ -143,7 +148,7 @@ if not result_path.exists():
     st.stop()
 
 try:
-    daily_summary, factory_summary = load_result_excel(result_path, result_path.stat().st_mtime_ns)
+    matching_result, daily_summary, factory_summary = load_result_excel(result_path, result_path.stat().st_mtime_ns)
 
     # 금일 데이터 제외 (아직 생산 중이므로) - KST 기준
     now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
@@ -225,13 +230,44 @@ try:
     over_rate = (over_prod / total_prod * 100) if total_prod > 0 else 0
     waste_rate = (waste_prod / total_prod * 100) if total_prod > 0 else 0
 
+    # 유효 대응률(규격 기준): 필요 SKU 중 생산이 1이라도 발생한 SKU 비율
+    # - 수량이 부족해도(need > prod) 생산이 발생하면 "대응"으로 카운트
+    spec_coverage_rate = None
+    needed_specs = 0
+    responded_specs = 0
+    unmet_specs = 0
+    if matching_result is not None and len(matching_result) > 0:
+        match_filtered = matching_result[
+            (matching_result["생산일자_date"] >= start_date) &
+            (matching_result["생산일자_date"] <= end_date) &
+            (matching_result["생산일자_date"] != today) &
+            (matching_result["제품코드"].notna())
+        ].copy()
+        if len(match_filtered) > 0:
+            for col in ["양품수량", "부족수량", "유효생산량"]:
+                if col in match_filtered.columns:
+                    match_filtered[col] = pd.to_numeric(match_filtered[col], errors="coerce").fillna(0)
+
+            # 필요 수량(추정) = 유효생산량 + 부족수량  (need > 0인 SKU가 '필요 SKU')
+            match_filtered["_need_qty"] = (match_filtered.get("유효생산량", 0) + match_filtered.get("부족수량", 0)).fillna(0)
+            by_sku = match_filtered.groupby("제품코드", dropna=False).agg(
+                need_qty=("_need_qty", "sum"),
+                prod_qty=("양품수량", "sum"),
+            ).reset_index()
+
+            needed = by_sku[by_sku["need_qty"] > 0]
+            needed_specs = int(len(needed))
+            responded_specs = int((needed["prod_qty"] > 0).sum()) if needed_specs > 0 else 0
+            unmet_specs = needed_specs - responded_specs
+            spec_coverage_rate = (responded_specs / needed_specs * 100) if needed_specs > 0 else None
+
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         render_kpi_card(
             f"{KPI_LABEL_MAP['총실적']} (pcs)",
             f"{total_prod:,}",
-            right_label="유효 대응률",
-            right_value=valid_rate,
+            right_label="유효 대응률(규격)" if spec_coverage_rate is not None else "유효 대응률(수량)",
+            right_value=spec_coverage_rate if spec_coverage_rate is not None else valid_rate,
             right_color="#1d4ed8",
             sub=f"선택기간 `{prod_days}`일",
         )
@@ -269,12 +305,21 @@ try:
             "- `정확 대응 생산량` : SKU별 `min(생산, 필요)`의 합\n"
             "- `초과 생산량` : SKU별 `max(생산-필요, 0)`의 합\n"
             "- `비정형 생산량` : 필요 SKU 외 생산(필요=0인데 생산>0)\n"
-            "- `유효 대응률` = `정확 대응 생산량` ÷ `총 생산량`\n"
+            "- `유효 대응률(수량)` = `정확 대응 생산량` ÷ `총 생산량`\n"
+            "- `유효 대응률(규격)` = 필요 규격 중 생산이 1이라도 발생한 규격 비율(수량 부족해도 대응으로 카운트)\n"
             "- 참고: `미충족 수요`는 45일 수주 기준 스냅샷 값으로 운영 참고용입니다."
         )
         st.write(f"- 선택기간 종료일 `미충족 수요`(스냅샷): `{shortage_snapshot:,}` pcs")
         if shortage_snapshot_date is not None:
             st.write(f"- 미충족 수요 기준일: `{shortage_snapshot_date}`")
+        if spec_coverage_rate is not None:
+            st.markdown("**규격 기준 유효 대응률(커버리지)**")
+            st.write(f"- 필요 규격 수: `{needed_specs:,}`")
+            st.write(f"- 대응 규격 수(생산 발생): `{responded_specs:,}`")
+            st.write(f"- 미대응 규격 수(미생산): `{unmet_specs:,}`")
+            st.write(f"- 유효 대응률(규격): `{spec_coverage_rate:.1f}` %")
+        else:
+            st.caption("규격 기준 유효 대응률은 `매칭결과` 시트(제품코드/양품수량/부족수량)가 있어야 계산됩니다.")
 
     st.markdown("<div style='margin-top:50px'></div>", unsafe_allow_html=True)
     # ============== 중간: 차트 ==============
@@ -298,15 +343,60 @@ try:
         factory_data["불필요비율(%)"] = (factory_data["불필요생산량"] / factory_data["총실적"] * 100).fillna(0)
 
         # 공장별 KPI (정확도 기반)
-        factory_data["유효 대응률(%)"] = factory_data["유효비율(%)"]
+        factory_data["유효 대응률(수량)(%)"] = factory_data["유효비율(%)"]
+
+        # 공장별 유효 대응률(규격): 필요 규격 중 생산 발생 규격 비율
+        factory_spec_label = "유효 대응률(수량)"
+        factory_spec_col = "유효 대응률(수량)(%)"
+        if matching_result is not None and "공장" in matching_result.columns:
+            match_factory = matching_result[
+                (matching_result["생산일자_date"] >= start_date) &
+                (matching_result["생산일자_date"] <= end_date) &
+                (matching_result["생산일자_date"] != today) &
+                (matching_result["제품코드"].notna()) &
+                (matching_result["공장"].notna())
+            ].copy()
+            if len(match_factory) > 0:
+                for col in ["양품수량", "부족수량", "유효생산량"]:
+                    if col in match_factory.columns:
+                        match_factory[col] = pd.to_numeric(match_factory[col], errors="coerce").fillna(0)
+                match_factory["_need_qty"] = (match_factory.get("유효생산량", 0) + match_factory.get("부족수량", 0)).fillna(0)
+                by_sku_factory = match_factory.groupby(["공장", "제품코드"], dropna=False).agg(
+                    need_qty=("_need_qty", "sum"),
+                    prod_qty=("양품수량", "sum"),
+                ).reset_index()
+                needed_rows = by_sku_factory[by_sku_factory["need_qty"] > 0].copy()
+                if len(needed_rows) > 0:
+                    spec_needed = needed_rows.groupby("공장").size().rename("필요 규격 수").reset_index()
+                    spec_responded = (
+                        needed_rows[needed_rows["prod_qty"] > 0]
+                        .groupby("공장")
+                        .size()
+                        .rename("대응 규격 수")
+                        .reset_index()
+                    )
+                    spec_rate = spec_needed.merge(spec_responded, on="공장", how="left")
+                    spec_rate["대응 규격 수"] = spec_rate["대응 규격 수"].fillna(0)
+                    spec_rate["유효 대응률(규격)(%)"] = np.where(
+                        spec_rate["필요 규격 수"] > 0,
+                        spec_rate["대응 규격 수"] / spec_rate["필요 규격 수"] * 100,
+                        0,
+                    )
+                    factory_data = factory_data.merge(spec_rate[["공장", "필요 규격 수", "대응 규격 수", "유효 대응률(규격)(%)"]], on="공장", how="left")
+                    factory_data["필요 규격 수"] = factory_data.get("필요 규격 수", 0).fillna(0)
+                    factory_data["대응 규격 수"] = factory_data.get("대응 규격 수", 0).fillna(0)
+                    factory_data["유효 대응률(규격)(%)"] = factory_data.get("유효 대응률(규격)(%)", 0).replace([np.inf, -np.inf], 0).fillna(0)
+                    factory_spec_label = "유효 대응률(규격)"
+                    factory_spec_col = "유효 대응률(규격)(%)"
 
         metric_option = st.radio(
             "공장 비교 지표",
-            ["유효 대응률", "정확 대응 비중", "초과 생산 비중", "비정형 생산 비중"],
+            [factory_spec_label, "정확 대응 비중", "초과 생산 비중", "비정형 생산 비중"],
             horizontal=True,
         )
         metric_desc = {
-            "유효 대응률": "총 생산 중 ‘정확 대응 생산량’ 비율(=정확 대응 비중)",
+            "유효 대응률(수량)": "총 생산 중 ‘정확 대응 생산량’ 비율(=정확 대응 비중)",
+            "유효 대응률(규격)": "필요 규격 중 생산이 1이라도 발생한 규격 비율(수량 부족해도 대응으로 카운트)",
             "정확 대응 비중": "총 생산량 중 정확 대응 생산량이 차지하는 비중",
             "초과 생산 비중": "총 생산량 중 초과 생산량이 차지하는 비중",
             "비정형 생산 비중": "총 생산량 중 비정형 생산량이 차지하는 비중",
@@ -314,7 +404,8 @@ try:
         st.caption(f"설명: {metric_desc[metric_option]}")
 
         metric_map = {
-            "유효 대응률": ("유효 대응률(%)", "유효생산량"),
+            "유효 대응률(수량)": ("유효 대응률(수량)(%)", "유효생산량"),
+            "유효 대응률(규격)": (factory_spec_col, "유효생산량"),
             "정확 대응 비중": ("유효비율(%)", "유효생산량"),
             "초과 생산 비중": ("과생산비율(%)", "과생산량"),
             "비정형 생산 비중": ("불필요비율(%)", "불필요생산량"),
@@ -334,7 +425,10 @@ try:
                 "유효생산량": ":,",
                 "과생산량": ":,",
                 "불필요생산량": ":,",
-                "유효 대응률(%)": ":.1f",
+                "유효 대응률(수량)(%)": ":.1f",
+                "유효 대응률(규격)(%)": ":.1f",
+                "필요 규격 수": ":,",
+                "대응 규격 수": ":,",
                 "유효비율(%)": ":.1f",
                 "과생산비율(%)": ":.1f",
                 "불필요비율(%)": ":.1f",
