@@ -264,8 +264,8 @@ try:
         adjust_est = int(daily_flow["추정조정(-)"].sum())
         shortage_target_period = int(shortage_start_snapshot + new_shortage_est)
 
-    # KPI용 "기간 부족 타겟"(초기 백로그 + 기간 중 신규부족 추정)
-    demand_total = shortage_target_period if shortage_target_period > 0 else shortage_snapshot
+    # 유입대응률(신규부족대비): 신규 수주/계획변경으로 "새로 생긴 부족"을 생산이 따라잡는지
+    inflow_rate = (valid_prod / new_shortage_est * 100) if new_shortage_est > 0 else None
     prod_days = int(daily_summary_filtered["날짜_date"].nunique()) if len(daily_summary_filtered) > 0 else 0
     avg_valid_per_day = (valid_prod / prod_days) if prod_days > 0 else 0
     backlog_days = (shortage_snapshot / avg_valid_per_day) if avg_valid_per_day > 0 else None
@@ -273,18 +273,16 @@ try:
     valid_rate = (valid_prod / total_prod * 100) if total_prod > 0 else 0
     over_rate = (over_prod / total_prod * 100) if total_prod > 0 else 0
     waste_rate = (waste_prod / total_prod * 100) if total_prod > 0 else 0
-    fulfillment_rate = (valid_prod / demand_total * 100) if demand_total > 0 else 0
-    fulfillment_rate = min(fulfillment_rate, 100.0)
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         render_kpi_card(
             f"{KPI_LABEL_MAP['총실적']} (pcs)",
             f"{total_prod:,}",
-            right_label="충족률(기간부족대비)",
-            right_value=fulfillment_rate,
+            right_label="유입대응률(신규부족대비)" if inflow_rate is not None else None,
+            right_value=inflow_rate,
             right_color="#1d4ed8",
-            sub="*초기 부족(스냅샷)+기간 신규부족(추정) 대비",
+            sub="*신규 부족(추정)에 생산이 따라잡는지",
         )
     with col2:
         render_kpi_card(
@@ -318,7 +316,7 @@ try:
         st.markdown(
             "- `총부족수량` = **(45일 수주 기준) 전체 수주 대비 잔여 부족수량(스냅샷)**\n"
             "- `유효생산량` = 부족 해소에 기여한 생산량(수요대응)\n"
-            "- `충족률(기간부족대비)` = 기간 유효생산량 ÷ (기간 시작 부족(스냅샷) + 기간 신규부족(추정))\n"
+            "- `유입대응률(신규부족대비)` = 기간 유효생산량 ÷ 기간 신규부족(추정 +)\n"
             "- `대응율`/`선행확보율`/`비계획율` = 각 생산량 ÷ 총실적\n"
             "- *`총부족수량`은 스냅샷 값이라 기간 합계(sum)로 더하면 중복될 수 있어, 선택기간 종료일 스냅샷을 사용합니다.*"
         )
@@ -326,7 +324,7 @@ try:
         if shortage_snapshot_date is not None:
             st.write(f"- 부족 스냅샷 기준일: `{shortage_snapshot_date}`")
         if shortage_start_snapshot_date is not None:
-            start_label = "기간 시작 부족(스냅샷)"
+            start_label = "기간 시작 잔여부족(스냅샷) (참고)"
             if shortage_start_snapshot_is_estimated:
                 start_label += " (추정)"
             st.write(f"- {start_label}: `{shortage_start_snapshot:,}` pcs (기준일: `{shortage_start_snapshot_date}`)")
@@ -334,8 +332,10 @@ try:
             st.write(f"- 기간 신규부족(추정 +): `{new_shortage_est:,}` pcs")
             if adjust_est > 0:
                 st.write(f"- 수주/계획 조정(추정 -): `{adjust_est:,}` pcs")
-            st.write(f"- 기간 부족 타겟(초기+신규): `{shortage_target_period:,}` pcs")
-        st.write(f"- 부족수량 (생산 타겟) = `{demand_total:,}` pcs")
+            if inflow_rate is not None:
+                st.write(f"- 유입대응률(신규부족대비): `{inflow_rate:.1f}` %")
+            else:
+                st.write("- 유입대응률(신규부족대비): `-` (기간 신규부족(추정)이 0이면 계산 생략)")
         if backlog_days is not None:
             st.write(f"- 백로그 해소 추정: `{backlog_days:.1f}` 일 (일평균 수요대응 `{avg_valid_per_day:,.0f}` pcs/일, 선택기간 `{prod_days}`일)")
 
