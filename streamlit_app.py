@@ -418,7 +418,11 @@ try:
                     factory_data["규격대응률(%)"] = 0.0
                 sku_coverage_available = True
 
-        metric_choices = (["규격 대응률"] if sku_coverage_available else []) + ["정확 대응 비중", "초과 생산 비중", "비정형 생산 비중"]
+        # NOTE: 규격 대응률은 메인 지표이므로 항상 노출합니다.
+        # 계산이 불가한 경우(예: 매칭결과에 공장 없음)에는 0으로 표시하고 안내문을 출력합니다.
+        if "규격대응률(%)" not in factory_data.columns:
+            factory_data["규격대응률(%)"] = 0.0
+        metric_choices = ["규격 대응률", "정확 대응 비중", "초과 생산 비중", "비정형 생산 비중"]
         radio_key = "factory_metric_option"
         if radio_key not in st.session_state or st.session_state[radio_key] not in metric_choices:
             st.session_state[radio_key] = metric_choices[0]
@@ -439,6 +443,8 @@ try:
         }
         metric_col, pcs_col = metric_map[metric_option]
         factory_data["선택지표"] = factory_data[metric_col].replace([np.inf, -np.inf], 0).fillna(0)
+        if metric_option == "규격 대응률" and not sku_coverage_available:
+            st.warning("공장별 `규격 대응률(SKU 기준)` 계산 불가: `매칭결과` 시트에 `공장` 컬럼이 없습니다. (현재는 0으로 표시)")
 
         hover_data = {
             "총실적": ":,",
