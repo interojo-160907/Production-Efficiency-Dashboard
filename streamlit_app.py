@@ -362,63 +362,64 @@ try:
         # 공장별 KPI (정확도 기반)
         factory_data["유효 대응률(수량)(%)"] = factory_data["유효비율(%)"]
 
-        # 공장별 규격 대응률: 필요 SKU 중 생산이 1이라도 발생한 SKU 비율
-        sku_coverage_available = False
-        if matching_result is not None and {"공장", "제품코드", "양품수량", "부족수량", "유효생산량", "날짜_date"}.issubset(set(matching_result.columns)):
-            match_factory = matching_result[
-                (matching_result["날짜_date"] >= start_date) &
-                (matching_result["날짜_date"] <= end_date) &
-                (matching_result["날짜_date"] != today) &
-                (matching_result["공장"].notna()) &
-                (matching_result["제품코드"].notna())
-            ].copy()
-            if len(match_factory) > 0:
-                for col in ["양품수량", "부족수량", "유효생산량"]:
-                    match_factory[col] = pd.to_numeric(match_factory[col], errors="coerce").fillna(0)
-                match_factory["_need_qty"] = (match_factory["유효생산량"] + match_factory["부족수량"]).fillna(0)
-                by_sku_factory = match_factory.groupby(["공장", "제품코드"], dropna=False).agg(
-                    need_qty=("_need_qty", "sum"),
-                    prod_qty=("양품수량", "sum"),
-                ).reset_index()
-                needed = by_sku_factory[by_sku_factory["need_qty"] > 0].copy()
-                if len(needed) > 0:
-                    sku_needed = needed.groupby("공장")["제품코드"].nunique().rename("필요 SKU 수").reset_index()
-                    sku_responded = (
-                        needed[needed["prod_qty"] > 0]
-                        .groupby("공장")["제품코드"]
-                        .nunique()
-                        .rename("대응 SKU 수")
-                        .reset_index()
-                    )
-                    sku_rate = sku_needed.merge(sku_responded, on="공장", how="left")
-                    sku_rate["대응 SKU 수"] = sku_rate["대응 SKU 수"].fillna(0)
-                    sku_rate["규격대응률(%)"] = np.where(
-                        sku_rate["필요 SKU 수"] > 0,
-                        sku_rate["대응 SKU 수"] / sku_rate["필요 SKU 수"] * 100,
-                        0,
-                    )
-                    factory_data = factory_data.merge(
-                        sku_rate[["공장", "필요 SKU 수", "대응 SKU 수", "규격대응률(%)"]],
-                        on="공장",
-                        how="left",
-                    )
-                    factory_data["필요 SKU 수"] = factory_data["필요 SKU 수"].fillna(0)
-                    factory_data["대응 SKU 수"] = factory_data["대응 SKU 수"].fillna(0)
-                    factory_data["규격대응률(%)"] = factory_data["규격대응률(%)"].replace([np.inf, -np.inf], 0).fillna(0)
-                    sku_coverage_available = True
+        # 공장별 규격 대응률(신규분류요약 기준): 생산한 규격 중 필요가 있었던 규격 비중
+        # - 정의: 기간 내 (공장, 신규분류요약) 단위로 집계했을 때,
+        #   생산 규격 수 중 필요(유효생산량+총부족수량)>0 인 규격이 차지하는 비율
+        spec_coverage_available = False
+        factory_data["규격대응률(%)"] = 0.0
+        if {"공장", "신규분류요약", "총실적", "총부족수량", "유효생산량"}.issubset(set(factory_summary_filtered.columns)):
+            spec_base = factory_summary_filtered.groupby(["공장", "신규분류요약"], dropna=False).agg(
+                total_prod=("총실적", "sum"),
+                shortage_qty=("총부족수량", "sum"),
+                valid_qty=("유효생산량", "sum"),
+            ).reset_index()
+            spec_base["total_prod"] = pd.to_numeric(spec_base["total_prod"], errors="coerce").fillna(0)
+            spec_base["shortage_qty"] = pd.to_numeric(spec_base["shortage_qty"], errors="coerce").fillna(0)
+            spec_base["valid_qty"] = pd.to_numeric(spec_base["valid_qty"], errors="coerce").fillna(0)
+            spec_base["produced_flag"] = spec_base["total_prod"] > 0
+            spec_base["_need_qty"] = (spec_base["valid_qty"] + spec_base["shortage_qty"]).fillna(0)
+            spec_base["need_flag"] = spec_base["_need_qty"] > 0
 
-        metric_choices = (["규격 대응률"] if sku_coverage_available else []) + [
-            "정확 대응 비중",
-            "초과 생산 비중",
-            "비정형 생산 비중",
-        ]
+            spec_counts = (
+                spec_base[spec_base["produced_flag"]]
+                .groupby("공장", dropna=False)
+                .agg(
+                    생산규격수=("신규분류요약", "nunique"),
+                    필요대응규격수=("need_flag", "sum"),
+                )
+                .reset_index()
+            )
+            spec_counts["규격대응률(%)"] = np.where(
+                spec_counts["생산규격수"] > 0,
+                spec_counts["필요대응규격수"] / spec_counts["생산규격수"] * 100,
+                0,
+            )
+            factory_data = factory_data.merge(
+                spec_counts[["공장", "생산규격수", "필요대응규격수", "규격대응률(%)"]],
+                on="공장",
+                how="left",
+            )
+            if "생산규격수" in factory_data.columns:
+                factory_data["생산규격수"] = factory_data["생산규격수"].fillna(0)
+            else:
+                factory_data["생산규격수"] = 0
+            if "필요대응규격수" in factory_data.columns:
+                factory_data["필요대응규격수"] = factory_data["필요대응규격수"].fillna(0)
+            else:
+                factory_data["필요대응규격수"] = 0
+            factory_data["규격대응률(%)"] = factory_data["규격대응률(%)"].replace([np.inf, -np.inf], 0).fillna(0)
+            spec_coverage_available = True
+
+        metric_choices = ["규격 대응률", "정확 대응 비중", "초과 생산 비중", "비정형 생산 비중"]
         metric_option = st.radio(
             "공장 비교 지표",
             metric_choices,
             horizontal=True,
+            index=0,
+            key="factory_metric_option",
         )
         metric_desc = {
-            "규격 대응률": "필요 SKU 중 생산이 1이라도 발생한 SKU 비율(수량 부족해도 대응으로 카운트)",
+            "규격 대응률": "생산한 규격(신규분류요약) 중 필요가 있었던 규격 비중",
             "정확 대응 비중": "총 생산량 중 정확 대응 생산량이 차지하는 비중",
             "초과 생산 비중": "총 생산량 중 초과 생산량이 차지하는 비중",
             "비정형 생산 비중": "총 생산량 중 비정형 생산량이 차지하는 비중",
@@ -439,8 +440,8 @@ try:
             "유효생산량": ":,",
             "과생산량": ":,",
             "불필요생산량": ":,",
-            "필요 SKU 수": ":,",
-            "대응 SKU 수": ":,",
+            "생산규격수": ":,",
+            "필요대응규격수": ":,",
             "규격대응률(%)": ":.1f",
             "유효비율(%)": ":.1f",
             "과생산비율(%)": ":.1f",
@@ -478,10 +479,8 @@ try:
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown(f"**선택 지표: {metric_option} (%)**")
-        if sku_coverage_available:
-            st.caption("Tip: `규격 대응률`은 필요 SKU 대비 생산 발생 SKU 비율입니다. 수량이 부족해도 생산이 1이라도 있으면 대응으로 카운트합니다.")
-        else:
-            st.caption("Tip: 공장별 `규격 대응률`은 `매칭결과` 시트에 `공장`/`제품코드`가 있어야 계산 가능합니다. 현재 파일은 공장 정보가 없어 전사 기준 ‘일자별 규격 대응 현황’만 제공합니다.")
+        if not spec_coverage_available:
+            st.caption("Tip: 공장별 `규격 대응률` 계산에 필요한 컬럼(`공장`, `신규분류요약`, `총실적`, `총부족수량`, `유효생산량`)이 없어 0으로 표시됩니다.")
 
         # 공장_신규분류별 통합 현황
         combined_metric_option = metric_option if metric_option in {"정확 대응 비중", "초과 생산 비중", "비정형 생산 비중"} else "정확 대응 비중"
