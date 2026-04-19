@@ -219,11 +219,53 @@ try:
         shortage_snapshot = 0
         shortage_snapshot_date = None
 
-    # IMPORTANT:
-    # 본 시스템은 전체 수요 기반이 아닌 "부족수량 기반 생산관리 구조"
-    # 따라서 부족수량 = 생산 타겟이며, 필요수량으로 간주함
-    # 수요대응 생산량은 해당 부족을 얼마나 해소했는지를 의미함
-    demand_total = shortage_snapshot
+    # 부족(백로그) 흐름(추정)
+    # - 총부족수량은 "전체 수주(45일 기준) 대비 잔여 부족"을 의미하는 스냅샷 값
+    # - 생산(유효생산량)으로 부족이 채워지고, 동시에 신규 수주/계획 변경으로 부족이 늘거나 줄 수 있음
+    daily_flow = None
+    shortage_start_snapshot = 0
+    shortage_start_snapshot_date = None
+    shortage_start_snapshot_is_estimated = False
+    new_shortage_est = 0
+    adjust_est = 0
+    shortage_target_period = 0
+    if len(daily_summary_filtered) > 0:
+        daily_sorted = daily_summary_filtered.sort_values("날짜_date").copy()
+
+        # 기간 시작 백로그(스냅샷): 가능하면 start_date 이전 마지막 스냅샷을 사용
+        daily_before = daily_summary[
+            (daily_summary["날짜_date"] < start_date) &
+            (daily_summary["날짜_date"] != today)
+        ]
+        if len(daily_before) > 0:
+            prev_last = daily_before.sort_values("날짜_date").iloc[-1]
+            shortage_start_snapshot = int(prev_last["총부족수량"])
+            shortage_start_snapshot_date = prev_last["날짜_date"]
+        else:
+            # 이전 스냅샷이 없으면 "기간 첫날 잔여부족 + 첫날 유효생산"으로 시작 백로그를 보수적으로 추정
+            first = daily_sorted.iloc[0]
+            shortage_start_snapshot = int(first["총부족수량"] + first["유효생산량"])
+            shortage_start_snapshot_date = first["날짜_date"]
+            shortage_start_snapshot_is_estimated = True
+
+        daily_flow = daily_sorted[["날짜_date", "총부족수량", "유효생산량"]].copy()
+        daily_flow.rename(columns={"총부족수량": "잔여부족(스냅샷)"}, inplace=True)
+        daily_flow["잔여부족_prev"] = daily_flow["잔여부족(스냅샷)"].shift(1)
+        daily_flow.loc[daily_flow.index[0], "잔여부족_prev"] = shortage_start_snapshot
+
+        daily_flow["잔여부족증감"] = daily_flow["잔여부족(스냅샷)"] - daily_flow["잔여부족_prev"]
+        # 잔여부족(t) = 잔여부족(t-1) + 신규부족(t) - 유효생산량(t)  (유효생산량이 전부 부족 해소에 투입된다고 가정)
+        daily_flow["추정신규부족"] = daily_flow["잔여부족증감"] + daily_flow["유효생산량"]
+        daily_flow["추정신규부족(+)"] = daily_flow["추정신규부족"].clip(lower=0)
+        # 추정신규부족이 음수면 수주취소/납기변경/계획조정 등으로 부족 자체가 줄어든 케이스로 해석
+        daily_flow["추정조정(-)"] = (-daily_flow["추정신규부족"].clip(upper=0))
+
+        new_shortage_est = int(daily_flow["추정신규부족(+)"].sum())
+        adjust_est = int(daily_flow["추정조정(-)"].sum())
+        shortage_target_period = int(shortage_start_snapshot + new_shortage_est)
+
+    # KPI용 "기간 부족 타겟"(초기 백로그 + 기간 중 신규부족 추정)
+    demand_total = shortage_target_period if shortage_target_period > 0 else shortage_snapshot
     prod_days = int(daily_summary_filtered["날짜_date"].nunique()) if len(daily_summary_filtered) > 0 else 0
     avg_valid_per_day = (valid_prod / prod_days) if prod_days > 0 else 0
     backlog_days = (shortage_snapshot / avg_valid_per_day) if avg_valid_per_day > 0 else None
@@ -239,10 +281,10 @@ try:
         render_kpi_card(
             f"{KPI_LABEL_MAP['총실적']} (pcs)",
             f"{total_prod:,}",
-            right_label="충족률(부족대비)",
+            right_label="충족률(기간부족대비)",
             right_value=fulfillment_rate,
             right_color="#1d4ed8",
-            sub="*부족수량은 45일 수주 기준 생산 타겟(스냅샷) 기준",
+            sub="*초기 부족(스냅샷)+기간 신규부족(추정) 대비",
         )
     with col2:
         render_kpi_card(
@@ -274,13 +316,25 @@ try:
 
     with st.expander("지표 정의/상세 보기", expanded=False):
         st.markdown(
-            "- `충족률(부족대비)` = 수요대응생산량 ÷ 부족수량\n"
+            "- `총부족수량` = **(45일 수주 기준) 전체 수주 대비 잔여 부족수량(스냅샷)**\n"
+            "- `유효생산량` = 부족 해소에 기여한 생산량(수요대응)\n"
+            "- `충족률(기간부족대비)` = 기간 유효생산량 ÷ (기간 시작 부족(스냅샷) + 기간 신규부족(추정))\n"
             "- `대응율`/`선행확보율`/`비계획율` = 각 생산량 ÷ 총실적\n"
-            "- *`총부족수량`은 45일 수주 기준 스냅샷 값이라 기간 합계로 더하면 중복될 수 있어, 선택기간 종료일 스냅샷을 사용합니다.*"
+            "- *`총부족수량`은 스냅샷 값이라 기간 합계(sum)로 더하면 중복될 수 있어, 선택기간 종료일 스냅샷을 사용합니다.*"
         )
-        st.write(f"- 45일 수주 부족(스냅샷): `{shortage_snapshot:,}` pcs")
+        st.write(f"- 선택기간 종료일 잔여부족(스냅샷): `{shortage_snapshot:,}` pcs")
         if shortage_snapshot_date is not None:
             st.write(f"- 부족 스냅샷 기준일: `{shortage_snapshot_date}`")
+        if shortage_start_snapshot_date is not None:
+            start_label = "기간 시작 부족(스냅샷)"
+            if shortage_start_snapshot_is_estimated:
+                start_label += " (추정)"
+            st.write(f"- {start_label}: `{shortage_start_snapshot:,}` pcs (기준일: `{shortage_start_snapshot_date}`)")
+        if daily_flow is not None and len(daily_flow) > 0:
+            st.write(f"- 기간 신규부족(추정 +): `{new_shortage_est:,}` pcs")
+            if adjust_est > 0:
+                st.write(f"- 수주/계획 조정(추정 -): `{adjust_est:,}` pcs")
+            st.write(f"- 기간 부족 타겟(초기+신규): `{shortage_target_period:,}` pcs")
         st.write(f"- 부족수량 (생산 타겟) = `{demand_total:,}` pcs")
         if backlog_days is not None:
             st.write(f"- 백로그 해소 추정: `{backlog_days:.1f}` 일 (일평균 수요대응 `{avg_valid_per_day:,.0f}` pcs/일, 선택기간 `{prod_days}`일)")
@@ -520,6 +574,84 @@ try:
 
     # ============== 일별 요약 ==============
     st.markdown("### 📊 일별 요약")
+
+    if daily_flow is not None and len(daily_flow) > 0:
+        flow_chart = daily_flow.copy()
+        flow_chart["날짜"] = pd.to_datetime(flow_chart["날짜_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+        fig_flow = go.Figure()
+        fig_flow.add_trace(
+            go.Bar(
+                x=flow_chart["날짜"],
+                y=flow_chart["유효생산량"],
+                name="유효생산량(부족해소)",
+                marker_color="#047857",
+                hovertemplate="%{x}<br>유효생산: %{y:,} pcs<extra></extra>",
+            )
+        )
+        fig_flow.add_trace(
+            go.Bar(
+                x=flow_chart["날짜"],
+                y=flow_chart["추정신규부족(+)"],
+                name="추정 신규부족(+)",
+                marker_color="#b45309",
+                hovertemplate="%{x}<br>신규부족(추정): %{y:,} pcs<extra></extra>",
+            )
+        )
+        fig_flow.add_trace(
+            go.Scatter(
+                x=flow_chart["날짜"],
+                y=flow_chart["잔여부족(스냅샷)"],
+                name="잔여부족(스냅샷)",
+                mode="lines+markers",
+                line=dict(color="#1d4ed8", width=2),
+                yaxis="y2",
+                hovertemplate="%{x}<br>잔여부족: %{y:,} pcs<extra></extra>",
+            )
+        )
+        fig_flow.update_layout(
+            title="부족 흐름(추정): 생산으로 채우고, 신규 수주/조정으로 변동",
+            barmode="group",
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            margin=dict(l=10, r=10, t=60, b=10),
+            yaxis=dict(title="pcs (생산/신규부족)"),
+            yaxis2=dict(
+                title="pcs (잔여부족 스냅샷)",
+                overlaying="y",
+                side="right",
+                showgrid=False,
+            ),
+        )
+        st.plotly_chart(fig_flow, use_container_width=True)
+
+        with st.expander("부족 흐름 수치(추정) 보기", expanded=False):
+            flow_table = flow_chart[
+                ["날짜", "잔여부족(스냅샷)", "유효생산량", "추정신규부족(+)", "추정조정(-)", "잔여부족증감"]
+            ].copy()
+            flow_table.rename(
+                columns={
+                    "잔여부족(스냅샷)": "잔여부족(스냅샷)(pcs)",
+                    "유효생산량": "유효생산량(pcs)",
+                    "추정신규부족(+)": "추정신규부족(+)(pcs)",
+                    "추정조정(-)": "추정조정(-)(pcs)",
+                    "잔여부족증감": "잔여부족증감(pcs)",
+                },
+                inplace=True,
+            )
+            st.dataframe(
+                flow_table.style.format(
+                    {
+                        "잔여부족(스냅샷)(pcs)": "{:,.0f}",
+                        "유효생산량(pcs)": "{:,.0f}",
+                        "추정신규부족(+)(pcs)": "{:,.0f}",
+                        "추정조정(-)(pcs)": "{:,.0f}",
+                        "잔여부족증감(pcs)": "{:,.0f}",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
 
     daily_display = daily_summary_filtered[["날짜", "총실적", "총부족수량", "유효생산량", "과생산량", "불필요생산량", "유효비율(%)"]].copy()
     # 날짜는 일자까지만 표시 (시간 제거)
