@@ -348,29 +348,32 @@ try:
         display_combined[pcs_hdr] = display_combined[pcs_hdr].map("{:,.0f}".format)
         display_combined[rate_hdr] = display_combined[rate_hdr].map("{:.1f}%".format)
 
+        extra_th = f"<th>{demand_hdr}</th><th>{shortage_hdr}</th>" if metric_option == "수요충족률(필요대비)" else ""
         html_parts = []
-        html_parts.append(f"""
-        <style>
-            .custom-table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
-            .custom-table th, .custom-table td {{ padding: 10px 12px; border: 1px solid #e2e8f0; }}
-            .custom-table th {{ background: #f8fafc; color: #111827; text-align: left; }}
-            .custom-table td {{ vertical-align: middle; }}
-            .custom-table td.number {{ text-align: right; }}
-            .custom-table tbody tr:nth-child(even) {{ background: #f8fafc22; }}
-        </style>
-        <table class="custom-table">
-           <thead>
-             <tr>
-               <th>공장</th>
-               <th>신규분류요약</th>
-              <th>{total_hdr}</th>
-              {"<th>" + demand_hdr + "</th><th>" + shortage_hdr + "</th>" if metric_option == "수요충족률(필요대비)" else ""}
-              <th>{pcs_hdr}</th>
-              <th>{rate_hdr}</th>
-             </tr>
-           </thead>
-           <tbody>
-        """)
+        # NOTE: Markdown에서는 4칸 이상 들여쓰기된 HTML이 코드블록으로 취급될 수 있어, 좌측 정렬로 생성합니다.
+        html_parts.append(
+            f"""<style>
+.custom-table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
+.custom-table th, .custom-table td {{ padding: 10px 12px; border: 1px solid #e2e8f0; }}
+.custom-table th {{ background: #f8fafc; color: #111827; text-align: left; }}
+.custom-table td {{ vertical-align: middle; }}
+.custom-table td.number {{ text-align: right; }}
+.custom-table tbody tr:nth-child(even) {{ background: #f8fafc22; }}
+</style>
+<table class="custom-table">
+  <thead>
+    <tr>
+      <th>공장</th>
+      <th>신규분류요약</th>
+      <th>{total_hdr}</th>
+      {extra_th}
+      <th>{pcs_hdr}</th>
+      <th>{rate_hdr}</th>
+    </tr>
+  </thead>
+  <tbody>
+"""
+        )
 
         grouped = display_combined.groupby("공장", sort=False)
         for factory_name, group in grouped:
@@ -412,6 +415,58 @@ try:
         use_container_width=True,
         hide_index=True
     )
+
+    with st.expander("🔎 관별(공장별) 일별 상세 펼치기", expanded=False):
+        if len(factory_summary_filtered) == 0:
+            st.info("선택한 기간에 공장별 데이터가 없습니다.")
+        else:
+            factory_daily = factory_summary_filtered.groupby(["생산일자_date", "공장"], dropna=False).agg({
+                "총실적": "sum",
+                "총부족수량": "sum",
+                "유효생산량": "sum",
+                "과생산량": "sum",
+                "불필요생산량": "sum",
+            }).reset_index()
+
+            factory_daily["수요대응율(총실적대비)(%)"] = (factory_daily["유효생산량"] / factory_daily["총실적"] * 100).fillna(0)
+            factory_daily["선행확보율(%)"] = (factory_daily["과생산량"] / factory_daily["총실적"] * 100).fillna(0)
+            factory_daily["비계획율(%)"] = (factory_daily["불필요생산량"] / factory_daily["총실적"] * 100).fillna(0)
+            factory_daily["필요수량"] = (factory_daily["유효생산량"] + factory_daily["총부족수량"]).fillna(0)
+            factory_daily["수요충족률(필요대비)(%)"] = (factory_daily["유효생산량"] / factory_daily["필요수량"] * 100).fillna(0)
+
+            factory_daily_display = factory_daily.rename(columns={
+                "생산일자_date": "날짜",
+                "총실적": f"{KPI_LABEL_MAP['총실적']} (pcs)",
+                "총부족수량": f"{KPI_LABEL_MAP['총부족수량']} (pcs)",
+                "유효생산량": f"{KPI_LABEL_MAP['유효생산량']} (pcs)",
+                "과생산량": f"{KPI_LABEL_MAP['과생산량']} (pcs)",
+                "불필요생산량": f"{KPI_LABEL_MAP['불필요생산량']} (pcs)",
+                "필요수량": "필요수량 (pcs)",
+            }).copy()
+
+            factory_daily_display["날짜"] = pd.to_datetime(factory_daily_display["날짜"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+            # 공장 순서 지정 (A관 > C관 > S관)
+            factory_order = {"A관(1공장)": 1, "C관(2공장)": 2, "S관(3공장)": 3}
+            factory_daily_display["_factory_sort"] = factory_daily_display["공장"].map(factory_order)
+            factory_daily_display = factory_daily_display.sort_values(["날짜", "_factory_sort", "공장"]).drop(columns=["_factory_sort"]).reset_index(drop=True)
+
+            st.dataframe(
+                factory_daily_display.style.format({
+                    f"{KPI_LABEL_MAP['총실적']} (pcs)": "{:,.0f}",
+                    f"{KPI_LABEL_MAP['총부족수량']} (pcs)": "{:,.0f}",
+                    f"{KPI_LABEL_MAP['유효생산량']} (pcs)": "{:,.0f}",
+                    f"{KPI_LABEL_MAP['과생산량']} (pcs)": "{:,.0f}",
+                    f"{KPI_LABEL_MAP['불필요생산량']} (pcs)": "{:,.0f}",
+                    "필요수량 (pcs)": "{:,.0f}",
+                    "수요대응율(총실적대비)(%)": "{:.1f}%",
+                    "수요충족률(필요대비)(%)": "{:.1f}%",
+                    "선행확보율(%)": "{:.1f}%",
+                    "비계획율(%)": "{:.1f}%",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
 
 except Exception as e:
     st.error(f"❌ 오류가 발생했습니다: {str(e)}")
