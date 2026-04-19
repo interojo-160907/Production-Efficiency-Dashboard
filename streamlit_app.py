@@ -46,18 +46,31 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-def load_result_excel(result_path: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """결과 엑셀 파일 로드"""
-    if not result_path.exists():
-        raise FileNotFoundError(f"결과 엑셀 파일을 찾을 수 없습니다: {result_path}")
+@st.cache_data(show_spinner=False)
+def load_result_excel(result_path: Path, mtime_ns: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """결과 엑셀 파일 로드 + 전처리 (Streamlit 캐시 적용)
 
-    sheets = pd.read_excel(result_path, sheet_name=None)
-    required = {"매칭결과", "일별요약", "공장_신규분류별"}
+    - 위젯 변경 시 전체 스크립트가 rerun 되므로, 엑셀 로딩/전처리를 캐시해 속도를 개선합니다.
+    - mtime_ns는 파일 변경 시 캐시 무효화를 위해 사용됩니다.
+    """
+    _ = mtime_ns  # cache key only
+    sheets = pd.read_excel(result_path, sheet_name=["일별요약", "공장_신규분류별"])
+
+    required = {"일별요약", "공장_신규분류별"}
     missing = required - set(sheets.keys())
     if missing:
         raise ValueError(f"결과 엑셀에 필요한 시트가 없습니다: {', '.join(missing)}")
 
-    return sheets["매칭결과"], sheets["일별요약"], sheets["공장_신규분류별"]
+    daily_summary = sheets["일별요약"]
+    factory_summary = sheets["공장_신규분류별"]
+
+    daily_summary["날짜"] = pd.to_datetime(daily_summary["날짜"], errors="coerce")
+    factory_summary["생산일자"] = pd.to_datetime(factory_summary["생산일자"], errors="coerce")
+
+    daily_summary["날짜_date"] = daily_summary["날짜"].dt.date
+    factory_summary["생산일자_date"] = factory_summary["생산일자"].dt.date
+
+    return daily_summary, factory_summary
 
 
 # 결과 파일 경로
@@ -70,18 +83,11 @@ if not result_path.exists():
     st.stop()
 
 try:
-    result, daily_summary, factory_summary = load_result_excel(result_path)
-
-    # 날짜 변환
-    daily_summary["날짜"] = pd.to_datetime(daily_summary["날짜"], errors="coerce")
-    factory_summary["생산일자"] = pd.to_datetime(factory_summary["생산일자"], errors="coerce")
+    daily_summary, factory_summary = load_result_excel(result_path, result_path.stat().st_mtime_ns)
 
     # 금일 데이터 제외 (아직 생산 중이므로) - KST 기준
     now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
     today = now_kst.date()
-    daily_summary["날짜_date"] = daily_summary["날짜"].dt.date
-    factory_summary["생산일자_date"] = factory_summary["생산일자"].dt.date
-
     st.caption(f"기준 시각(KST): {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
 
     # 제목
@@ -221,7 +227,7 @@ try:
 
         metric_option = st.radio(
             "표시할 지표를 선택하세요",
-            ["수요대응율(총실적대비)", "수요충족률(필요대비)", "선행확보율", "비계획율"],
+            ["수요충족률(필요대비)", "수요대응율(총실적대비)", "선행확보율", "비계획율"],
             horizontal=True
         )
         metric_desc = {
@@ -342,7 +348,8 @@ try:
         display_combined[pcs_hdr] = display_combined[pcs_hdr].map("{:,.0f}".format)
         display_combined[rate_hdr] = display_combined[rate_hdr].map("{:.1f}%".format)
 
-        html = f"""
+        html_parts = []
+        html_parts.append(f"""
         <style>
             .custom-table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
             .custom-table th, .custom-table td {{ padding: 10px 12px; border: 1px solid #e2e8f0; }}
@@ -363,25 +370,25 @@ try:
              </tr>
            </thead>
            <tbody>
-        """
+        """)
 
         grouped = display_combined.groupby("공장", sort=False)
         for factory_name, group in grouped:
             rowspan = len(group)
             for idx, row in group.iterrows():
-                html += "<tr>"
+                html_parts.append("<tr>")
                 if idx == group.index[0]:
-                    html += f"<td rowspan='{rowspan}' style='vertical-align: middle; font-weight: 600;'>{factory_name}</td>"
-                html += f"<td>{row['신규분류요약']}</td>"
-                html += f"<td class='number'>{row[total_hdr]}</td>"
+                    html_parts.append(f"<td rowspan='{rowspan}' style='vertical-align: middle; font-weight: 600;'>{factory_name}</td>")
+                html_parts.append(f"<td>{row['신규분류요약']}</td>")
+                html_parts.append(f"<td class='number'>{row[total_hdr]}</td>")
                 if metric_option == "수요충족률(필요대비)":
-                    html += f"<td class='number'>{row[demand_hdr]}</td>"
-                    html += f"<td class='number'>{row[shortage_hdr]}</td>"
-                html += f"<td class='number'>{row[pcs_hdr]}</td>"
-                html += f"<td class='number'>{row[rate_hdr]}</td>"
-                html += "</tr>"
-        html += "</tbody></table>"
-        st.markdown(html, unsafe_allow_html=True)
+                    html_parts.append(f"<td class='number'>{row[demand_hdr]}</td>")
+                    html_parts.append(f"<td class='number'>{row[shortage_hdr]}</td>")
+                html_parts.append(f"<td class='number'>{row[pcs_hdr]}</td>")
+                html_parts.append(f"<td class='number'>{row[rate_hdr]}</td>")
+                html_parts.append("</tr>")
+        html_parts.append("</tbody></table>")
+        st.markdown("".join(html_parts), unsafe_allow_html=True)
 
     # ============== 일별 요약 ==============
     st.markdown("### 📊 일별 요약")
