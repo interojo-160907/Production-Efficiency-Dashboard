@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 
 # 페이지 설정
-DASHBOARD_TITLE = "생산 운영 현황 대시보드"
+DASHBOARD_TITLE = "수요 대응 생산량 대시보드"
 KPI_LABEL_MAP = {
     "총실적": "총 생산량",
     "유효생산량": "수요 대응 생산량",
