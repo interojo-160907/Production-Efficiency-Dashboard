@@ -209,7 +209,7 @@ try:
     valid_prod = int(daily_summary_filtered["유효생산량"].sum()) if len(daily_summary_filtered) > 0 else 0
     over_prod = int(daily_summary_filtered["과생산량"].sum()) if len(daily_summary_filtered) > 0 else 0
     waste_prod = int(daily_summary_filtered["불필요생산량"].sum()) if len(daily_summary_filtered) > 0 else 0
-    # NOTE: '총부족수량'이 45일 수주 기준 부족(스냅샷)이라면 기간 합계(sum)는 중복 집계가 될 수 있어,
+    # NOTE: '총부족수량(=미충족 수요)'이 45일 수주 기준 스냅샷이라면 기간 합계(sum)는 중복 집계가 될 수 있어,
     # 선택 기간의 "마지막 날짜" 기준 스냅샷을 사용합니다.
     if len(daily_summary_filtered) > 0:
         daily_last = daily_summary_filtered.sort_values("날짜_date").iloc[-1]
@@ -243,7 +243,7 @@ try:
         )
     with col3:
         render_kpi_card(
-            f"{KPI_LABEL_MAP['총부족수량']} (pcs)",
+            f"{KPI_LABEL_MAP['총부족수량']} (참고) (pcs)",
             f"{shortage_snapshot:,}",
             sub="*선택기간 종료일 스냅샷(참고용)",
         )
@@ -271,7 +271,7 @@ try:
 
     st.markdown("<div style='margin-top:50px'></div>", unsafe_allow_html=True)
     # ============== 중간: 차트 ==============
-    st.markdown("### 📈 공장별 현황")
+    st.markdown("### 📈 공장별 운영 현황")
 
     if len(factory_summary_filtered) == 0:
         st.info("선택한 기간에 공장별 데이터가 없습니다.")
@@ -291,7 +291,13 @@ try:
         factory_data["불필요비율(%)"] = (factory_data["불필요생산량"] / factory_data["총실적"] * 100).fillna(0)
 
         # 공장별 기준 미충족 수요(스냅샷) 계산: start_date 이전 마지막 스냅샷(없으면 start_date 이후 첫 스냅샷)
-        base_for_baseline = factory_summary.dropna(subset=["생산일자_date"]).copy()
+        # NOTE: 공장_신규분류별 시트는 (공장, 날짜, 분류) 단위이므로 공장 기준 스냅샷은 날짜별 합계로 만든 뒤 사용합니다.
+        base_for_baseline = (
+            factory_summary.dropna(subset=["생산일자_date"])
+            .groupby(["생산일자_date", "공장"], dropna=False)["총부족수량"]
+            .sum()
+            .reset_index()
+        )
         base_for_baseline = base_for_baseline[base_for_baseline["생산일자_date"] != today]
 
         before = base_for_baseline[base_for_baseline["생산일자_date"] < start_date]
@@ -324,7 +330,12 @@ try:
         baseline_short["기준일"] = baseline_short["기준일"].astype(str)
 
         # 참고용: 기간 종료일 기준 미충족 수요(스냅샷)
-        end_snapshot = factory_summary_filtered.dropna(subset=["생산일자_date"]).copy()
+        end_snapshot = (
+            factory_summary_filtered.dropna(subset=["생산일자_date"])
+            .groupby(["생산일자_date", "공장"], dropna=False)["총부족수량"]
+            .sum()
+            .reset_index()
+        )
         if len(end_snapshot) > 0:
             idx_end = end_snapshot.groupby("공장")["생산일자_date"].idxmax()
             end_short = end_snapshot.loc[idx_end, ["공장", "총부족수량", "생산일자_date"]].rename(
@@ -519,8 +530,8 @@ try:
                     html_parts.append(f"<td rowspan='{rowspan}' style='vertical-align: middle; font-weight: 600;'>{factory_name}</td>")
                 html_parts.append(f"<td>{row['신규분류요약']}</td>")
                 html_parts.append(f"<td class='number'>{row[total_hdr]}</td>")
-                if metric_option == "수요충족률(부족대비)":
-                    html_parts.append(f"<td class='number'>{row[demand_hdr]}</td>")
+                if metric_option == "생산 대응 수준":
+                    html_parts.append(f"<td class='number'>{row[baseline_hdr]}</td>")
                 html_parts.append(f"<td class='number'>{row[pcs_hdr]}</td>")
                 html_parts.append(f"<td class='number'>{row[rate_hdr]}</td>")
                 html_parts.append("</tr>")
@@ -530,7 +541,9 @@ try:
     # ============== 일별 요약 ==============
     st.markdown("### 📊 일별 요약")
 
-    daily_display = daily_summary_filtered[["날짜", "총실적", "총부족수량", "유효생산량", "과생산량", "불필요생산량", "유효비율(%)"]].copy()
+    daily_display = daily_summary_filtered[
+        ["날짜", "총실적", "총부족수량", "유효생산량", "과생산량", "불필요생산량", "유효비율(%)", "과생산비율(%)", "불필요비율(%)"]
+    ].copy()
     # 날짜는 일자까지만 표시 (시간 제거)
     daily_display["날짜"] = daily_display["날짜"].dt.strftime("%Y-%m-%d")
     # pcs 컬럼은 콤마 표시 및 컬럼명에 (pcs) 추가
@@ -545,6 +558,8 @@ try:
         daily_display.style.format({
             **{f"{KPI_LABEL_MAP.get(c, c)} (pcs)": "{:,.0f}" for c in pcs_cols},
             RATE_LABEL_MAP["유효비율(%)"]: "{:.1f}%",
+            RATE_LABEL_MAP["과생산비율(%)"]: "{:.1f}%",
+            RATE_LABEL_MAP["불필요비율(%)"]: "{:.1f}%",
         }),
         use_container_width=True,
         hide_index=True
@@ -562,11 +577,9 @@ try:
                 "불필요생산량": "sum",
             }).reset_index()
 
-            factory_daily["수요대응율(총실적대비)(%)"] = (factory_daily["유효생산량"] / factory_daily["총실적"] * 100).fillna(0)
-            factory_daily["선행확보율(%)"] = (factory_daily["과생산량"] / factory_daily["총실적"] * 100).fillna(0)
-            factory_daily["비계획율(%)"] = (factory_daily["불필요생산량"] / factory_daily["총실적"] * 100).fillna(0)
-            factory_daily["부족수량 (생산 타겟)"] = factory_daily["총부족수량"].fillna(0)
-            factory_daily["수요충족률(부족대비)(%)"] = (factory_daily["유효생산량"] / factory_daily["부족수량 (생산 타겟)"] * 100).replace([np.inf, -np.inf], 0).fillna(0).clip(upper=100.0)
+            factory_daily[RATE_LABEL_MAP["유효비율(%)"]] = (factory_daily["유효생산량"] / factory_daily["총실적"] * 100).replace([np.inf, -np.inf], 0).fillna(0)
+            factory_daily[RATE_LABEL_MAP["과생산비율(%)"]] = (factory_daily["과생산량"] / factory_daily["총실적"] * 100).replace([np.inf, -np.inf], 0).fillna(0)
+            factory_daily[RATE_LABEL_MAP["불필요비율(%)"]] = (factory_daily["불필요생산량"] / factory_daily["총실적"] * 100).replace([np.inf, -np.inf], 0).fillna(0)
 
             factory_daily_display = factory_daily.rename(columns={
                 "생산일자_date": "날짜",
@@ -575,7 +588,6 @@ try:
                 "유효생산량": f"{KPI_LABEL_MAP['유효생산량']} (pcs)",
                 "과생산량": f"{KPI_LABEL_MAP['과생산량']} (pcs)",
                 "불필요생산량": f"{KPI_LABEL_MAP['불필요생산량']} (pcs)",
-                "부족수량 (생산 타겟)": "부족수량 (생산 타겟) (pcs)",
             }).copy()
 
             factory_daily_display["날짜"] = pd.to_datetime(factory_daily_display["날짜"], errors="coerce").dt.strftime("%Y-%m-%d")
@@ -592,11 +604,9 @@ try:
                     f"{KPI_LABEL_MAP['유효생산량']} (pcs)": "{:,.0f}",
                     f"{KPI_LABEL_MAP['과생산량']} (pcs)": "{:,.0f}",
                     f"{KPI_LABEL_MAP['불필요생산량']} (pcs)": "{:,.0f}",
-                    "부족수량 (생산 타겟) (pcs)": "{:,.0f}",
-                    "수요대응율(총실적대비)(%)": "{:.1f}%",
-                    "수요충족률(부족대비)(%)": "{:.1f}%",
-                    "선행확보율(%)": "{:.1f}%",
-                    "비계획율(%)": "{:.1f}%",
+                    RATE_LABEL_MAP["유효비율(%)"]: "{:.1f}%",
+                    RATE_LABEL_MAP["과생산비율(%)"]: "{:.1f}%",
+                    RATE_LABEL_MAP["불필요비율(%)"]: "{:.1f}%",
                 }),
                 use_container_width=True,
                 hide_index=True,
