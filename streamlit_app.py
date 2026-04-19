@@ -348,32 +348,38 @@ try:
         display_combined[pcs_hdr] = display_combined[pcs_hdr].map("{:,.0f}".format)
         display_combined[rate_hdr] = display_combined[rate_hdr].map("{:.1f}%".format)
 
-        extra_th = f"<th>{demand_hdr}</th><th>{shortage_hdr}</th>" if metric_option == "수요충족률(필요대비)" else ""
         html_parts = []
-        # NOTE: Markdown에서는 4칸 이상 들여쓰기된 HTML이 코드블록으로 취급될 수 있어, 좌측 정렬로 생성합니다.
-        html_parts.append(
-            f"""<style>
-.custom-table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
-.custom-table th, .custom-table td {{ padding: 10px 12px; border: 1px solid #e2e8f0; }}
-.custom-table th {{ background: #f8fafc; color: #111827; text-align: left; }}
-.custom-table td {{ vertical-align: middle; }}
-.custom-table td.number {{ text-align: right; }}
-.custom-table tbody tr:nth-child(even) {{ background: #f8fafc22; }}
-</style>
-<table class="custom-table">
-  <thead>
-    <tr>
-      <th>공장</th>
-      <th>신규분류요약</th>
-      <th>{total_hdr}</th>
-      {extra_th}
-      <th>{pcs_hdr}</th>
-      <th>{rate_hdr}</th>
-    </tr>
-  </thead>
-  <tbody>
-"""
+        # NOTE: Markdown에서는 4칸 이상 들여쓰기된 HTML이 코드블록으로 취급될 수 있어,
+        # 모든 라인을 "맨 앞 공백 없이" 생성합니다.
+        header_lines = [
+            "<style>",
+            ".custom-table { width: 100%; border-collapse: collapse; font-size: 14px; }",
+            ".custom-table th, .custom-table td { padding: 10px 12px; border: 1px solid #e2e8f0; }",
+            ".custom-table th { background: #f8fafc; color: #111827; text-align: left; }",
+            ".custom-table td { vertical-align: middle; }",
+            ".custom-table td.number { text-align: right; }",
+            ".custom-table tbody tr:nth-child(even) { background: #f8fafc22; }",
+            "</style>",
+            "<table class=\"custom-table\">",
+            "<thead>",
+            "<tr>",
+            "<th>공장</th>",
+            "<th>신규분류요약</th>",
+            f"<th>{total_hdr}</th>",
+        ]
+        if metric_option == "수요충족률(필요대비)":
+            header_lines.append(f"<th>{demand_hdr}</th>")
+            header_lines.append(f"<th>{shortage_hdr}</th>")
+        header_lines.extend(
+            [
+                f"<th>{pcs_hdr}</th>",
+                f"<th>{rate_hdr}</th>",
+                "</tr>",
+                "</thead>",
+                "<tbody>",
+            ]
         )
+        html_parts.append("\n".join(header_lines) + "\n")
 
         grouped = display_combined.groupby("공장", sort=False)
         for factory_name, group in grouped:
