@@ -473,16 +473,19 @@ try:
         combined_summary["과생산비율(%)"] = (combined_summary["과생산량"] / combined_summary["총실적"] * 100).fillna(0)
         combined_summary["불필요비율(%)"] = (combined_summary["불필요생산량"] / combined_summary["총실적"] * 100).fillna(0)
 
-        combined_summary["유효 대응률(%)"] = combined_summary["유효비율(%)"]
+        combined_summary["유효 대응률(수량)(%)"] = combined_summary["유효비율(%)"]
 
         # 선택지표 추가
         metric_map = {
-            "유효 대응률": ("유효 대응률(%)", "유효생산량"),
+            "유효 대응률(수량)": ("유효 대응률(수량)(%)", "유효생산량"),
+            "유효 대응률(규격)": ("유효 대응률(규격)(%)", "유효생산량"),
             "정확 대응 비중": ("유효비율(%)", "유효생산량"),
             "초과 생산 비중": ("과생산비율(%)", "과생산량"),
             "비정형 생산 비중": ("불필요비율(%)", "불필요생산량"),
         }
-        metric_col, pcs_col = metric_map[metric_option]
+        metric_col, pcs_col = metric_map.get(metric_option, ("유효 대응률(수량)(%)", "유효생산량"))
+        if metric_col not in combined_summary.columns:
+            metric_col = "유효 대응률(수량)(%)"
         combined_summary["선택지표"] = combined_summary[metric_col].fillna(0)
 
         # 테이블 표시
