@@ -1,4 +1,4 @@
-import os
+﻿import os
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -9,18 +9,18 @@ import plotly.graph_objects as go
 import plotly.express as px
 
 # 페이지 설정
-DASHBOARD_TITLE = "수요 대응 생산량 대시보드"
+DASHBOARD_TITLE = "생산 운영 현황 대시보드"
 KPI_LABEL_MAP = {
     "총실적": "총 생산량",
-    "총부족수량": "총 부족수량",
-    "유효생산량": "수요 대응 생산량",
-    "과생산량": "선행 확보 생산량",
-    "불필요생산량": "비계획 생산량",
+    "총부족수량": "미충족 수요",
+    "유효생산량": "수요 반영 생산량",
+    "과생산량": "사전 확보 생산량",
+    "불필요생산량": "운영 편차 생산량",
 }
 RATE_LABEL_MAP = {
-    "유효비율(%)": "수요대응율(%)",
-    "과생산비율(%)": "선행확보율(%)",
-    "불필요비율(%)": "비계획율(%)",
+    "유효비율(%)": "수요 반영 비중(%)",
+    "과생산비율(%)": "사전 확보 비중(%)",
+    "불필요비율(%)": "운영 편차 비중(%)",
 }
 
 st.set_page_config(page_title=DASHBOARD_TITLE, layout="wide", initial_sidebar_state="collapsed")
@@ -219,56 +219,7 @@ try:
         shortage_snapshot = 0
         shortage_snapshot_date = None
 
-    # 부족(백로그) 흐름(추정)
-    # - 총부족수량은 "전체 수주(45일 기준) 대비 잔여 부족"을 의미하는 스냅샷 값
-    # - 생산(유효생산량)으로 부족이 채워지고, 동시에 신규 수주/계획 변경으로 부족이 늘거나 줄 수 있음
-    daily_flow = None
-    shortage_start_snapshot = 0
-    shortage_start_snapshot_date = None
-    shortage_start_snapshot_is_estimated = False
-    new_shortage_est = 0
-    adjust_est = 0
-    shortage_target_period = 0
-    if len(daily_summary_filtered) > 0:
-        daily_sorted = daily_summary_filtered.sort_values("날짜_date").copy()
-
-        # 기간 시작 백로그(스냅샷): 가능하면 start_date 이전 마지막 스냅샷을 사용
-        daily_before = daily_summary[
-            (daily_summary["날짜_date"] < start_date) &
-            (daily_summary["날짜_date"] != today)
-        ]
-        if len(daily_before) > 0:
-            prev_last = daily_before.sort_values("날짜_date").iloc[-1]
-            shortage_start_snapshot = int(prev_last["총부족수량"])
-            shortage_start_snapshot_date = prev_last["날짜_date"]
-        else:
-            # 이전 스냅샷이 없으면 "기간 첫날 잔여부족 + 첫날 유효생산"으로 시작 백로그를 보수적으로 추정
-            first = daily_sorted.iloc[0]
-            shortage_start_snapshot = int(first["총부족수량"] + first["유효생산량"])
-            shortage_start_snapshot_date = first["날짜_date"]
-            shortage_start_snapshot_is_estimated = True
-
-        daily_flow = daily_sorted[["날짜_date", "총부족수량", "유효생산량"]].copy()
-        daily_flow.rename(columns={"총부족수량": "잔여부족(스냅샷)"}, inplace=True)
-        daily_flow["잔여부족_prev"] = daily_flow["잔여부족(스냅샷)"].shift(1)
-        daily_flow.loc[daily_flow.index[0], "잔여부족_prev"] = shortage_start_snapshot
-
-        daily_flow["잔여부족증감"] = daily_flow["잔여부족(스냅샷)"] - daily_flow["잔여부족_prev"]
-        # 잔여부족(t) = 잔여부족(t-1) + 신규부족(t) - 유효생산량(t)  (유효생산량이 전부 부족 해소에 투입된다고 가정)
-        daily_flow["추정신규부족"] = daily_flow["잔여부족증감"] + daily_flow["유효생산량"]
-        daily_flow["추정신규부족(+)"] = daily_flow["추정신규부족"].clip(lower=0)
-        # 추정신규부족이 음수면 수주취소/납기변경/계획조정 등으로 부족 자체가 줄어든 케이스로 해석
-        daily_flow["추정조정(-)"] = (-daily_flow["추정신규부족"].clip(upper=0))
-
-        new_shortage_est = int(daily_flow["추정신규부족(+)"].sum())
-        adjust_est = int(daily_flow["추정조정(-)"].sum())
-        shortage_target_period = int(shortage_start_snapshot + new_shortage_est)
-
-    # 유입대응률(신규부족대비): 신규 수주/계획변경으로 "새로 생긴 부족"을 생산이 따라잡는지
-    inflow_rate = (valid_prod / new_shortage_est * 100) if new_shortage_est > 0 else None
     prod_days = int(daily_summary_filtered["날짜_date"].nunique()) if len(daily_summary_filtered) > 0 else 0
-    avg_valid_per_day = (valid_prod / prod_days) if prod_days > 0 else 0
-    backlog_days = (shortage_snapshot / avg_valid_per_day) if avg_valid_per_day > 0 else None
 
     valid_rate = (valid_prod / total_prod * 100) if total_prod > 0 else 0
     over_rate = (over_prod / total_prod * 100) if total_prod > 0 else 0
@@ -279,65 +230,44 @@ try:
         render_kpi_card(
             f"{KPI_LABEL_MAP['총실적']} (pcs)",
             f"{total_prod:,}",
-            right_label="유입대응률(신규부족대비)" if inflow_rate is not None else None,
-            right_value=inflow_rate,
-            right_color="#1d4ed8",
-            sub="*신규 부족(추정)에 생산이 따라잡는지",
+            sub=f"선택기간 `{prod_days}`일",
         )
     with col2:
         render_kpi_card(
             f"{KPI_LABEL_MAP['유효생산량']} (pcs)",
             f"{valid_prod:,}",
-            right_label="대응율",
+            right_label=RATE_LABEL_MAP["유효비율(%)"],
             right_value=valid_rate,
             right_color="#047857",
-            sub="총실적 대비",
+            sub=f"{KPI_LABEL_MAP['총실적']} 대비",
         )
     with col3:
         render_kpi_card(
-            f"{KPI_LABEL_MAP['과생산량']} (pcs)",
-            f"{over_prod:,}",
-            right_label="선행확보율",
-            right_value=over_rate,
-            right_color="#b91c1c",
-            sub="총실적 대비",
+            f"{KPI_LABEL_MAP['총부족수량']} (pcs)",
+            f"{shortage_snapshot:,}",
+            sub="*선택기간 종료일 스냅샷(참고용)",
         )
     with col4:
         render_kpi_card(
             f"{KPI_LABEL_MAP['불필요생산량']} (pcs)",
             f"{waste_prod:,}",
-            right_label="비계획율",
+            right_label=RATE_LABEL_MAP["불필요비율(%)"],
             right_value=waste_rate,
             right_color="#b45309",
-            sub="총실적 대비",
+            sub=f"{KPI_LABEL_MAP['총실적']} 대비",
         )
 
     with st.expander("지표 정의/상세 보기", expanded=False):
         st.markdown(
-            "- `총부족수량` = **(45일 수주 기준) 전체 수주 대비 잔여 부족수량(스냅샷)**\n"
-            "- `유효생산량` = 부족 해소에 기여한 생산량(수요대응)\n"
-            "- `유입대응률(신규부족대비)` = 기간 유효생산량 ÷ 기간 신규부족(추정 +)\n"
-            "- `대응율`/`선행확보율`/`비계획율` = 각 생산량 ÷ 총실적\n"
-            "- *`총부족수량`은 스냅샷 값이라 기간 합계(sum)로 더하면 중복될 수 있어, 선택기간 종료일 스냅샷을 사용합니다.*"
+            "- `미충족 수요` : 45일 수주 기준 현재 남아 있는 수요 스냅샷\n"
+            "- `수요 반영 생산량` : 실제 수요 대응에 반영된 생산량\n"
+            "- `사전 확보 생산량` : 향후 대응을 위해 선제적으로 확보된 생산량\n"
+            "- `운영 편차 생산량` : 일반적인 수요 대응 흐름과 다르게 운영된 생산량\n"
+            "- *`미충족 수요`는 스냅샷 값이라 기간 합계(sum)로 더하면 중복될 수 있어, 선택기간 종료일 스냅샷을 참고용으로 표시합니다.*"
         )
-        st.write(f"- 선택기간 종료일 잔여부족(스냅샷): `{shortage_snapshot:,}` pcs")
+        st.write(f"- 선택기간 종료일 `미충족 수요`(스냅샷): `{shortage_snapshot:,}` pcs")
         if shortage_snapshot_date is not None:
-            st.write(f"- 부족 스냅샷 기준일: `{shortage_snapshot_date}`")
-        if shortage_start_snapshot_date is not None:
-            start_label = "기간 시작 잔여부족(스냅샷) (참고)"
-            if shortage_start_snapshot_is_estimated:
-                start_label += " (추정)"
-            st.write(f"- {start_label}: `{shortage_start_snapshot:,}` pcs (기준일: `{shortage_start_snapshot_date}`)")
-        if daily_flow is not None and len(daily_flow) > 0:
-            st.write(f"- 기간 신규부족(추정 +): `{new_shortage_est:,}` pcs")
-            if adjust_est > 0:
-                st.write(f"- 수주/계획 조정(추정 -): `{adjust_est:,}` pcs")
-            if inflow_rate is not None:
-                st.write(f"- 유입대응률(신규부족대비): `{inflow_rate:.1f}` %")
-            else:
-                st.write("- 유입대응률(신규부족대비): `-` (기간 신규부족(추정)이 0이면 계산 생략)")
-        if backlog_days is not None:
-            st.write(f"- 백로그 해소 추정: `{backlog_days:.1f}` 일 (일평균 수요대응 `{avg_valid_per_day:,.0f}` pcs/일, 선택기간 `{prod_days}`일)")
+            st.write(f"- 미충족 수요 기준일: `{shortage_snapshot_date}`")
 
     st.markdown("<div style='margin-top:50px'></div>", unsafe_allow_html=True)
     # ============== 중간: 차트 ==============
@@ -346,69 +276,102 @@ try:
     if len(factory_summary_filtered) == 0:
         st.info("선택한 기간에 공장별 데이터가 없습니다.")
     else:
-        # 공장별 데이터 준비
-        factory_data = factory_summary_filtered.groupby("공장", dropna=False).agg({
-            "총실적": "sum",
-            "총부족수량": "sum",
-            "유효생산량": "sum",
-            "과생산량": "sum",
-            "불필요생산량": "sum"
-        }).reset_index()
+        # 공장별 기간 집계
+        factory_data = factory_summary_filtered.groupby("공장", dropna=False).agg(
+            {
+                "총실적": "sum",
+                "유효생산량": "sum",
+                "과생산량": "sum",
+                "불필요생산량": "sum",
+            }
+        ).reset_index()
 
         factory_data["유효비율(%)"] = (factory_data["유효생산량"] / factory_data["총실적"] * 100).fillna(0)
         factory_data["과생산비율(%)"] = (factory_data["과생산량"] / factory_data["총실적"] * 100).fillna(0)
         factory_data["불필요비율(%)"] = (factory_data["불필요생산량"] / factory_data["총실적"] * 100).fillna(0)
 
+        # 공장별 기준 미충족 수요(스냅샷) 계산: start_date 이전 마지막 스냅샷(없으면 start_date 이후 첫 스냅샷)
+        base_for_baseline = factory_summary.dropna(subset=["생산일자_date"]).copy()
+        base_for_baseline = base_for_baseline[base_for_baseline["생산일자_date"] != today]
+
+        before = base_for_baseline[base_for_baseline["생산일자_date"] < start_date]
+        after = base_for_baseline[base_for_baseline["생산일자_date"] >= start_date]
+
+        baseline_parts = []
+        if len(before) > 0:
+            idx_prev = before.groupby("공장")["생산일자_date"].idxmax()
+            baseline_parts.append(
+                before.loc[idx_prev, ["공장", "총부족수량", "생산일자_date"]].rename(
+                    columns={"총부족수량": "기준 미충족 수요", "생산일자_date": "기준일"}
+                )
+            )
+        if len(after) > 0:
+            idx_first = after.groupby("공장")["생산일자_date"].idxmin()
+            baseline_first = after.loc[idx_first, ["공장", "총부족수량", "생산일자_date"]].rename(
+                columns={"총부족수량": "기준 미충족 수요", "생산일자_date": "기준일"}
+            )
+            if len(baseline_parts) > 0:
+                already = set(baseline_parts[0]["공장"].dropna().tolist())
+                baseline_first = baseline_first[~baseline_first["공장"].isin(already)]
+            baseline_parts.append(baseline_first)
+
+        if len(baseline_parts) > 0:
+            baseline_short = pd.concat(baseline_parts, ignore_index=True)
+        else:
+            baseline_short = pd.DataFrame(columns=["공장", "기준 미충족 수요", "기준일"])
+
+        baseline_short["기준 미충족 수요"] = baseline_short["기준 미충족 수요"].fillna(0)
+        baseline_short["기준일"] = baseline_short["기준일"].astype(str)
+
+        # 참고용: 기간 종료일 기준 미충족 수요(스냅샷)
+        end_snapshot = factory_summary_filtered.dropna(subset=["생산일자_date"]).copy()
+        if len(end_snapshot) > 0:
+            idx_end = end_snapshot.groupby("공장")["생산일자_date"].idxmax()
+            end_short = end_snapshot.loc[idx_end, ["공장", "총부족수량", "생산일자_date"]].rename(
+                columns={"총부족수량": "종료 미충족 수요(참고)", "생산일자_date": "종료일"}
+            )
+        else:
+            end_short = pd.DataFrame(columns=["공장", "종료 미충족 수요(참고)", "종료일"])
+        end_short["종료 미충족 수요(참고)"] = end_short["종료 미충족 수요(참고)"].fillna(0)
+        end_short["종료일"] = end_short["종료일"].astype(str)
+
+        factory_data = factory_data.merge(baseline_short, on="공장", how="left")
+        factory_data = factory_data.merge(end_short, on="공장", how="left")
+        factory_data["기준 미충족 수요"] = factory_data["기준 미충족 수요"].fillna(0)
+        factory_data["기준일"] = factory_data["기준일"].fillna("")
+        factory_data["종료 미충족 수요(참고)"] = factory_data["종료 미충족 수요(참고)"].fillna(0)
+        factory_data["종료일"] = factory_data["종료일"].fillna("")
+
+        # 공장 비교용 핵심 지표(3축)
+        factory_data["생산 대응 수준(%)"] = np.where(
+            factory_data["기준 미충족 수요"] > 0,
+            factory_data["유효생산량"] / factory_data["기준 미충족 수요"] * 100,
+            0,
+        )
+        factory_data["운영 편차 비중(%)"] = factory_data["불필요생산량"] / factory_data["총실적"] * 100
+        factory_data["사전 확보 비중(%)"] = factory_data["과생산량"] / factory_data["총실적"] * 100
+        factory_data["운영 편차 비중(%)"] = factory_data["운영 편차 비중(%)"].replace([np.inf, -np.inf], 0).fillna(0)
+        factory_data["사전 확보 비중(%)"] = factory_data["사전 확보 비중(%)"].replace([np.inf, -np.inf], 0).fillna(0)
+
         metric_option = st.radio(
-            "표시할 지표를 선택하세요",
-            ["수요충족률(부족대비)", "수요대응율(총실적대비)", "선행확보율", "비계획율"],
-            horizontal=True
+            "공장 비교 지표",
+            ["생산 대응 수준", "운영 편차 비중", "사전 확보 비중"],
+            horizontal=True,
         )
         metric_desc = {
-            "수요대응율(총실적대비)": "총 생산량(실적) 중 수요 대응 생산량이 차지하는 비중",
-            "수요충족률(부족대비)": "부족수량 (생산 타겟) 대비 수요 대응 생산량 비율",
-            "선행확보율": "향후 대응을 위한 선제 생산 비율",
-            "비계획율": "수요 기준에 포함되지 않은 생산 비율",
+            "생산 대응 수준": "기준 시점 미충족 수요 대비, 선택 기간 중 수요 반영 생산이 어느 정도 반영됐는지",
+            "운영 편차 비중": "총 생산 중 운영 편차 생산이 차지하는 비중",
+            "사전 확보 비중": "총 생산 중 미래 대응 목적 생산 비중",
         }
         st.caption(f"설명: {metric_desc[metric_option]}")
 
-        # 공장별 추가 지표 (필요대비)
-        # NOTE: 기간 내 '총부족수량' 합계는 중복 집계가 될 수 있어, 공장별 최신일(스냅샷) 기준으로 사용합니다.
-        factory_short_snapshot = factory_summary_filtered.dropna(subset=["생산일자_date"]).copy()
-        if len(factory_short_snapshot) > 0:
-            idx = factory_short_snapshot.groupby("공장")["생산일자_date"].idxmax()
-            short_snap = factory_short_snapshot.loc[idx, ["공장", "총부족수량", "생산일자_date"]].rename(
-                columns={"총부족수량": "부족수량(스냅샷)", "생산일자_date": "부족기준일"}
-            )
-        else:
-            short_snap = pd.DataFrame(columns=["공장", "부족수량(스냅샷)", "부족기준일"])
-        factory_data = factory_data.merge(short_snap, on="공장", how="left")
-        factory_data["부족수량(스냅샷)"] = factory_data["부족수량(스냅샷)"].fillna(0)
-
-        factory_data["부족수량 (생산 타겟)"] = factory_data["부족수량(스냅샷)"].fillna(0)
-        
-        # 일별 수요충족률의 평균으로 계산 (기간 합계의 왜곡 방지)
-        tmp_daily = factory_summary_filtered.groupby(["생산일자_date", "공장"])[["유효생산량", "총부족수량"]].sum().reset_index()
-        tmp_daily["일별충족률"] = (tmp_daily["유효생산량"] / tmp_daily["총부족수량"] * 100).replace([np.inf, -np.inf], 0).fillna(0).clip(upper=100.0)
-        avg_fulfillment = tmp_daily.groupby("공장")["일별충족률"].mean().reset_index().rename(columns={"일별충족률": "수요충족률(%)"})
-        
-        factory_data = factory_data.merge(avg_fulfillment, on="공장", how="left")
-        factory_data["수요충족률(%)"] = factory_data["수요충족률(%)"].fillna(0)
-        # 백로그 해소 추정(일) = 부족(스냅샷) / (선택기간 일평균 수요대응 생산량)
-        prod_days_factory = int(factory_summary_filtered["생산일자_date"].nunique()) if len(factory_summary_filtered) > 0 else 0
-        factory_data["일평균수요대응(pcs/일)"] = (factory_data["유효생산량"] / prod_days_factory).fillna(0) if prod_days_factory > 0 else 0
-        factory_data["백로그해소추정(일)"] = (
-            factory_data["부족수량(스냅샷)"] / factory_data["일평균수요대응(pcs/일)"]
-        ).where(factory_data["일평균수요대응(pcs/일)"] > 0)
-
         metric_map = {
-            "수요대응율(총실적대비)": ("유효비율(%)", "유효생산량"),
-            "수요충족률(부족대비)": ("수요충족률(%)", "유효생산량"),
-            "선행확보율": ("과생산비율(%)", "과생산량"),
-            "비계획율": ("불필요비율(%)", "불필요생산량"),
+            "생산 대응 수준": ("생산 대응 수준(%)", "유효생산량"),
+            "운영 편차 비중": ("운영 편차 비중(%)", "불필요생산량"),
+            "사전 확보 비중": ("사전 확보 비중(%)", "과생산량"),
         }
         metric_col, pcs_col = metric_map[metric_option]
-        factory_data["선택지표"] = factory_data[metric_col]
+        factory_data["선택지표"] = factory_data[metric_col].fillna(0)
 
         fig = px.bar(
             factory_data,
@@ -419,13 +382,13 @@ try:
             text="선택지표",
             hover_data={
                 "총실적": ":,",
-                "부족수량 (생산 타겟)": ":,",
+                "기준 미충족 수요": ":,",
+                "기준일": True,
+                "종료 미충족 수요(참고)": ":,",
+                "종료일": True,
                 "유효생산량": ":,",
                 "과생산량": ":,",
                 "불필요생산량": ":,",
-                "수요충족률(%)": ":.1f",
-                "일평균수요대응(pcs/일)": ":,.0f",
-                "백로그해소추정(일)": ":.1f",
                 "선택지표": ":.1f",
             },
         )
@@ -439,7 +402,7 @@ try:
             height=520,
             showlegend=False,
             margin=dict(l=0, r=0, t=60, b=0),
-            yaxis=dict(range=[0, 100], title=dict(text=f"{metric_option} (%)", font=dict(size=16, family="Arial", color="#222222"))),
+            yaxis=dict(title=dict(text=f"{metric_option} (%)", font=dict(size=16, family="Arial", color="#222222"))),
             xaxis=dict(
                 title=dict(text="공장", font=dict(size=16, family="Arial", color="#222222")),
                 tickfont=dict(size=18, family="Arial", color="#222222")
@@ -449,65 +412,57 @@ try:
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown(f"**선택 지표: {metric_option} (%)**")
-        st.caption("Tip: 부족수량(생산 타겟)은 '45일 수주 기준 부족수량(스냅샷)'을 의미하므로, '수요대응율(총실적대비)'만 보지 말고 '수요충족률(부족대비)'도 같이 확인하는 것이 안전합니다.")
+        st.caption("Tip: `미충족 수요`는 기간 중 계속 변하므로 공장 비교 분모로 쓰지 않고, `기준 미충족 수요(시작 시점 스냅샷)`를 고정 분모로 사용합니다.")
 
         # 공장_신규분류별 통합 현황
         combined_summary = factory_summary_filtered.groupby(["공장", "신규분류요약"], dropna=False).agg({
             "총실적": "sum",
-            "총부족수량": "sum",
             "유효생산량": "sum",
             "과생산량": "sum",
             "불필요생산량": "sum"
         }).reset_index()
 
-        # 분류별 부족수량도 최신일(스냅샷) 기준으로 별도 계산
-        combined_short_snapshot = factory_summary_filtered.dropna(subset=["생산일자_date"]).copy()
-        if len(combined_short_snapshot) > 0:
-            idx = combined_short_snapshot.groupby(["공장", "신규분류요약"])["생산일자_date"].idxmax()
-            short_snap = combined_short_snapshot.loc[idx, ["공장", "신규분류요약", "총부족수량", "생산일자_date"]].rename(
-                columns={"총부족수량": "부족수량(스냅샷)", "생산일자_date": "부족기준일"}
-            )
-        else:
-            short_snap = pd.DataFrame(columns=["공장", "신규분류요약", "부족수량(스냅샷)", "부족기준일"])
-        combined_summary = combined_summary.merge(short_snap, on=["공장", "신규분류요약"], how="left")
-        combined_summary["부족수량(스냅샷)"] = combined_summary["부족수량(스냅샷)"].fillna(0)
-
         # 비율 계산
         combined_summary["유효비율(%)"] = (combined_summary["유효생산량"] / combined_summary["총실적"] * 100).fillna(0)
         combined_summary["과생산비율(%)"] = (combined_summary["과생산량"] / combined_summary["총실적"] * 100).fillna(0)
         combined_summary["불필요비율(%)"] = (combined_summary["불필요생산량"] / combined_summary["총실적"] * 100).fillna(0)
-        combined_summary["부족수량 (생산 타겟)"] = combined_summary["부족수량(스냅샷)"].fillna(0)
-        
-        # 일별 수요충족률의 평균으로 계산
-        tmp_daily_comb = factory_summary_filtered.groupby(["생산일자_date", "공장", "신규분류요약"])[["유효생산량", "총부족수량"]].sum().reset_index()
-        tmp_daily_comb["일별충족률"] = (tmp_daily_comb["유효생산량"] / tmp_daily_comb["총부족수량"] * 100).replace([np.inf, -np.inf], 0).fillna(0).clip(upper=100.0)
-        avg_fulfillment_comb = tmp_daily_comb.groupby(["공장", "신규분류요약"])["일별충족률"].mean().reset_index().rename(columns={"일별충족률": "수요충족률(%)"})
-        
-        combined_summary = combined_summary.merge(avg_fulfillment_comb, on=["공장", "신규분류요약"], how="left")
-        combined_summary["수요충족률(%)"] = combined_summary["수요충족률(%)"].fillna(0)
+
+        # 공장별 기준 미충족 수요(고정 분모) 병합
+        combined_summary = combined_summary.merge(
+            baseline_short[["공장", "기준 미충족 수요"]],
+            on="공장",
+            how="left",
+        )
+        combined_summary["기준 미충족 수요"] = combined_summary["기준 미충족 수요"].fillna(0)
+        combined_summary["생산 대응 수준(%)"] = np.where(
+            combined_summary["기준 미충족 수요"] > 0,
+            combined_summary["유효생산량"] / combined_summary["기준 미충족 수요"] * 100,
+            0,
+        )
+        combined_summary["운영 편차 비중(%)"] = (combined_summary["불필요생산량"] / combined_summary["총실적"] * 100).replace([np.inf, -np.inf], 0).fillna(0)
+        combined_summary["사전 확보 비중(%)"] = (combined_summary["과생산량"] / combined_summary["총실적"] * 100).replace([np.inf, -np.inf], 0).fillna(0)
 
         # 선택지표 추가
         metric_map = {
-            "수요대응율(총실적대비)": ("유효비율(%)", "유효생산량"),
-            "수요충족률(부족대비)": ("수요충족률(%)", "유효생산량"),
-            "선행확보율": ("과생산비율(%)", "과생산량"),
-            "비계획율": ("불필요비율(%)", "불필요생산량"),
+            "생산 대응 수준": ("생산 대응 수준(%)", "유효생산량"),
+            "운영 편차 비중": ("운영 편차 비중(%)", "불필요생산량"),
+            "사전 확보 비중": ("사전 확보 비중(%)", "과생산량"),
         }
         metric_col, pcs_col = metric_map[metric_option]
-        combined_summary["선택지표"] = combined_summary[metric_col]
+        combined_summary["선택지표"] = combined_summary[metric_col].fillna(0)
 
         # 테이블 표시
         base_cols = ["공장", "신규분류요약", "총실적"]
-        if metric_option == "수요충족률(부족대비)":
-            display_combined = combined_summary[base_cols + ["부족수량 (생산 타겟)", pcs_col, "선택지표"]].copy()
+        if metric_option == "생산 대응 수준":
+            display_combined = combined_summary[base_cols + ["기준 미충족 수요", pcs_col, "선택지표"]].copy()
         else:
             display_combined = combined_summary[base_cols + [pcs_col, "선택지표"]].copy()
         total_hdr = f"{KPI_LABEL_MAP['총실적']} (pcs)"
-        demand_hdr = "부족수량 (생산 타겟) (pcs)"
+        baseline_hdr = "기준 미충족 수요 (pcs)"
         pcs_hdr = f"{KPI_LABEL_MAP[pcs_col]} (pcs)"
         rate_hdr = f"{metric_option} (%)"
-        if metric_option == "수요충족률(부족대비)":
-            display_combined.columns = ["공장", "신규분류요약", total_hdr, demand_hdr, pcs_hdr, rate_hdr]
+        if metric_option == "생산 대응 수준":
+            display_combined.columns = ["공장", "신규분류요약", total_hdr, baseline_hdr, pcs_hdr, rate_hdr]
         else:
             display_combined.columns = ["공장", "신규분류요약", total_hdr, pcs_hdr, rate_hdr]
 
@@ -518,8 +473,8 @@ try:
         display_combined = display_combined.drop("_factory_sort", axis=1)
 
         display_combined[total_hdr] = display_combined[total_hdr].map("{:,.0f}".format)
-        if metric_option == "수요충족률(부족대비)":
-            display_combined[demand_hdr] = display_combined[demand_hdr].map("{:,.0f}".format)
+        if metric_option == "생산 대응 수준":
+            display_combined[baseline_hdr] = display_combined[baseline_hdr].map("{:,.0f}".format)
         display_combined[pcs_hdr] = display_combined[pcs_hdr].map("{:,.0f}".format)
         display_combined[rate_hdr] = display_combined[rate_hdr].map("{:.1f}%".format)
 
@@ -542,8 +497,8 @@ try:
             "<th>신규분류요약</th>",
             f"<th>{total_hdr}</th>",
         ]
-        if metric_option == "수요충족률(부족대비)":
-            header_lines.append(f"<th>{demand_hdr}</th>")
+        if metric_option == "생산 대응 수준":
+            header_lines.append(f"<th>{baseline_hdr}</th>")
         header_lines.extend(
             [
                 f"<th>{pcs_hdr}</th>",
@@ -574,84 +529,6 @@ try:
 
     # ============== 일별 요약 ==============
     st.markdown("### 📊 일별 요약")
-
-    if daily_flow is not None and len(daily_flow) > 0:
-        flow_chart = daily_flow.copy()
-        flow_chart["날짜"] = pd.to_datetime(flow_chart["날짜_date"], errors="coerce").dt.strftime("%Y-%m-%d")
-
-        fig_flow = go.Figure()
-        fig_flow.add_trace(
-            go.Bar(
-                x=flow_chart["날짜"],
-                y=flow_chart["유효생산량"],
-                name="유효생산량(부족해소)",
-                marker_color="#047857",
-                hovertemplate="%{x}<br>유효생산: %{y:,} pcs<extra></extra>",
-            )
-        )
-        fig_flow.add_trace(
-            go.Bar(
-                x=flow_chart["날짜"],
-                y=flow_chart["추정신규부족(+)"],
-                name="추정 신규부족(+)",
-                marker_color="#b45309",
-                hovertemplate="%{x}<br>신규부족(추정): %{y:,} pcs<extra></extra>",
-            )
-        )
-        fig_flow.add_trace(
-            go.Scatter(
-                x=flow_chart["날짜"],
-                y=flow_chart["잔여부족(스냅샷)"],
-                name="잔여부족(스냅샷)",
-                mode="lines+markers",
-                line=dict(color="#1d4ed8", width=2),
-                yaxis="y2",
-                hovertemplate="%{x}<br>잔여부족: %{y:,} pcs<extra></extra>",
-            )
-        )
-        fig_flow.update_layout(
-            title="부족 흐름(추정): 생산으로 채우고, 신규 수주/조정으로 변동",
-            barmode="group",
-            hovermode="x unified",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-            margin=dict(l=10, r=10, t=60, b=10),
-            yaxis=dict(title="pcs (생산/신규부족)"),
-            yaxis2=dict(
-                title="pcs (잔여부족 스냅샷)",
-                overlaying="y",
-                side="right",
-                showgrid=False,
-            ),
-        )
-        st.plotly_chart(fig_flow, use_container_width=True)
-
-        with st.expander("부족 흐름 수치(추정) 보기", expanded=False):
-            flow_table = flow_chart[
-                ["날짜", "잔여부족(스냅샷)", "유효생산량", "추정신규부족(+)", "추정조정(-)", "잔여부족증감"]
-            ].copy()
-            flow_table.rename(
-                columns={
-                    "잔여부족(스냅샷)": "잔여부족(스냅샷)(pcs)",
-                    "유효생산량": "유효생산량(pcs)",
-                    "추정신규부족(+)": "추정신규부족(+)(pcs)",
-                    "추정조정(-)": "추정조정(-)(pcs)",
-                    "잔여부족증감": "잔여부족증감(pcs)",
-                },
-                inplace=True,
-            )
-            st.dataframe(
-                flow_table.style.format(
-                    {
-                        "잔여부족(스냅샷)(pcs)": "{:,.0f}",
-                        "유효생산량(pcs)": "{:,.0f}",
-                        "추정신규부족(+)(pcs)": "{:,.0f}",
-                        "추정조정(-)(pcs)": "{:,.0f}",
-                        "잔여부족증감(pcs)": "{:,.0f}",
-                    }
-                ),
-                use_container_width=True,
-                hide_index=True,
-            )
 
     daily_display = daily_summary_filtered[["날짜", "총실적", "총부족수량", "유효생산량", "과생산량", "불필요생산량", "유효비율(%)"]].copy()
     # 날짜는 일자까지만 표시 (시간 제거)
