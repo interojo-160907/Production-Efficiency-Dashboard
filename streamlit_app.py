@@ -73,6 +73,76 @@ st.markdown("""
         color: #6b7280;
         line-height: 1.2;
     }
+    .kpi-split {
+        background-color: #f0f4f8;
+        border-radius: 12px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        display: flex;
+        overflow: hidden;
+        height: 100%;
+    }
+    .kpi-cell {
+        padding: 16px 16px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-width: 0;
+    }
+    .kpi-cell.left {
+        flex: 1.6;
+    }
+    .kpi-cell.right {
+        flex: 1.0;
+    }
+    .kpi-divider {
+        width: 1px;
+        background: rgba(17, 24, 39, 0.12);
+        margin: 14px 0;
+        flex: 0 0 1px;
+    }
+    .kpi-cell-title {
+        font-size: 14px;
+        font-weight: 700;
+        color: #374151;
+        line-height: 1.2;
+        margin-bottom: 6px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .kpi-cell-value {
+        font-size: clamp(22px, 2.2vw, 34px);
+        font-weight: 900;
+        color: #111827;
+        letter-spacing: 0.3px;
+        line-height: 1.0;
+        margin: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .kpi-cell-sub {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #6b7280;
+        line-height: 1.2;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    @media (max-width: 900px) {
+        .kpi-split {
+            flex-direction: column;
+        }
+        .kpi-divider {
+            width: 100%;
+            height: 1px;
+            margin: 0 14px;
+        }
+        .kpi-cell.left, .kpi-cell.right {
+            flex: unset;
+        }
+    }
     h1 {
         text-align: center;
         color: #1f3a93;
@@ -105,6 +175,34 @@ def render_kpi_card(title: str, value: str, right_label: str | None = None, righ
 """,
         unsafe_allow_html=True,
     )
+
+
+def render_kpi_split_card(
+    left_title: str,
+    left_value: str,
+    right_title: str,
+    right_value: str,
+    right_sub: str | None = None,
+) -> None:
+    right_sub_html = f"<div class='kpi-cell-sub'>{right_sub}</div>" if right_sub else ""
+    st.markdown(
+        f"""
+<div class="kpi-split">
+  <div class="kpi-cell left">
+    <div class="kpi-cell-title">{left_title}</div>
+    <div class="kpi-cell-value">{left_value}</div>
+  </div>
+  <div class="kpi-divider"></div>
+  <div class="kpi-cell right">
+    <div class="kpi-cell-title">{right_title}</div>
+    <div class="kpi-cell-value">{right_value}</div>
+    {right_sub_html}
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
 
 @st.cache_data(show_spinner=False)
 def load_result_excel(result_path: Path, mtime_ns: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -151,9 +249,8 @@ if not result_candidates:
     st.info("먼저 `aps_yield_dashboard.py`를 실행해서 결과 파일을 생성하세요.")
     st.stop()
 
-result_labels = [p.name for p in result_candidates]
-selected_label = st.selectbox("결과 파일", result_labels, index=0, label_visibility="collapsed")
-result_path = next(p for p in result_candidates if p.name == selected_label)
+# 최신 결과 파일 자동 선택 (파일 선택 UI 숨김)
+result_path = result_candidates[0]
 
 try:
     matching_result, daily_summary, factory_summary = load_result_excel(result_path, result_path.stat().st_mtime_ns)
@@ -280,22 +377,18 @@ try:
             need_responded_skus_total = float(shortage_prod_daily["필요대응SKU수"].sum())
             shortage_prod_rate = (need_responded_skus_total / produced_skus_total * 100) if produced_skus_total > 0 else None
 
-    col1, col2, col3, col4, col5 = st.columns([2.2, 1.3, 1.1, 1.1, 1.1])
-    with col1:
-        render_kpi_card(
-            f"{KPI_LABEL_MAP['총실적']} (pcs)",
-            f"{total_prod:,}",
-            sub=None,
-        )
-    with col2:
+    colA, col3, col4, col5 = st.columns([2.6, 1.1, 1.1, 1.1])
+    with colA:
         spec_value = f"{shortage_prod_rate:.1f}%" if shortage_prod_rate is not None else "-"
         spec_sub = "일자별 (필요SKU∩생산SKU) / 생산SKU"
         if shortage_prod_rate is None:
-            spec_sub = "계산 불가: `매칭결과`에 제품코드/수량 필요"
-        render_kpi_card(
+            spec_sub = "계산 불가: 매칭결과에 제품코드/수량 필요"
+        render_kpi_split_card(
+            f"{KPI_LABEL_MAP['총실적']} (pcs)",
+            f"{total_prod:,}",
             "규격 대응률 (%)",
             f"<span style='color:#1d4ed8'>{spec_value}</span>",
-            sub=spec_sub,
+            right_sub=spec_sub,
         )
 
     with col3:
