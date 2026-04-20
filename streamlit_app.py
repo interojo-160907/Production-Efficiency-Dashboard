@@ -639,6 +639,104 @@ try:
 
                 html_parts.append("</tbody></table>")
                 st.markdown("".join(html_parts), unsafe_allow_html=True)
+
+                st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+                st.markdown("**공장-신규분류 SKU 기준 상세**")
+
+                if matching_result is None or len(matching_result) == 0 or not {"공장", "신규분류요약", "제품코드", "양품수량", "부족수량", "유효생산량", "날짜_date"}.issubset(set(matching_result.columns)):
+                    st.info("신규분류 기준 SKU 상세 집계를 위해 `매칭결과`에 `공장/신규분류요약/제품코드/수량/날짜` 컬럼이 필요합니다.")
+                else:
+                    mf2 = matching_result[
+                        (matching_result["날짜_date"] >= start_date) &
+                        (matching_result["날짜_date"] <= end_date) &
+                        (matching_result["날짜_date"] != today) &
+                        (matching_result["공장"].notna()) &
+                        (matching_result["제품코드"].notna())
+                    ].copy()
+
+                    if len(mf2) == 0:
+                        st.info("선택한 기간에 신규분류 기준 SKU 집계 데이터가 없습니다.")
+                    else:
+                        for col in ["양품수량", "부족수량", "유효생산량"]:
+                            mf2[col] = pd.to_numeric(mf2[col], errors="coerce").fillna(0)
+                        mf2["_need_qty"] = (mf2["유효생산량"] + mf2["부족수량"]).fillna(0)
+
+                        by_day_factory_class_sku = mf2.groupby(["날짜_date", "공장", "신규분류요약", "제품코드"], dropna=False).agg(
+                            prod_qty=("양품수량", "sum"),
+                            need_qty=("_need_qty", "sum"),
+                        ).reset_index()
+                        by_day_factory_class_sku["produced_flag"] = by_day_factory_class_sku["prod_qty"] > 0
+                        by_day_factory_class_sku["need_flag"] = by_day_factory_class_sku["need_qty"] > 0
+
+                        produced = (
+                            by_day_factory_class_sku[by_day_factory_class_sku["produced_flag"]]
+                            .groupby(["날짜_date", "공장", "신규분류요약"], dropna=False)["제품코드"]
+                            .nunique()
+                            .rename("생산SKU수")
+                        )
+                        needed = (
+                            by_day_factory_class_sku[by_day_factory_class_sku["produced_flag"] & by_day_factory_class_sku["need_flag"]]
+                            .groupby(["날짜_date", "공장", "신규분류요약"], dropna=False)["제품코드"]
+                            .nunique()
+                            .rename("필요대응SKU수")
+                        )
+                        day_counts = pd.concat([produced, needed], axis=1).fillna(0).reset_index()
+                        sku_counts = day_counts.groupby(["공장", "신규분류요약"], dropna=False)[["생산SKU수", "필요대응SKU수"]].sum().reset_index()
+                        sku_counts["규격대응률(%)"] = np.where(
+                            sku_counts["생산SKU수"] > 0,
+                            sku_counts["필요대응SKU수"] / sku_counts["생산SKU수"] * 100,
+                            0,
+                        )
+                        sku_counts["규격대응률(%)"] = sku_counts["규격대응률(%)"].clip(0, 100)
+
+                        sku_counts["_factory_sort"] = sku_counts["공장"].map(factory_order)
+                        sku_counts = sku_counts.sort_values(["_factory_sort", "신규분류요약"]).reset_index(drop=True).drop("_factory_sort", axis=1)
+
+                        sku_counts_fmt = sku_counts.copy()
+                        sku_counts_fmt["생산SKU수"] = sku_counts_fmt["생산SKU수"].map("{:,.0f}".format)
+                        sku_counts_fmt["필요대응SKU수"] = sku_counts_fmt["필요대응SKU수"].map("{:,.0f}".format)
+                        sku_counts_fmt["규격대응률(%)"] = sku_counts_fmt["규격대응률(%)"].map("{:.1f}%".format)
+                        sku_counts_fmt["신규분류요약"] = sku_counts_fmt["신규분류요약"].fillna("미분류")
+
+                        html_parts = []
+                        header_lines = [
+                            "<style>",
+                            ".custom-table { width: 100%; border-collapse: collapse; font-size: 14px; }",
+                            ".custom-table th, .custom-table td { padding: 10px 12px; border: 1px solid #e2e8f0; }",
+                            ".custom-table th { background: #f8fafc; color: #111827; text-align: left; }",
+                            ".custom-table td { vertical-align: middle; }",
+                            ".custom-table td.number { text-align: right; }",
+                            ".custom-table tbody tr:nth-child(even) { background: #f8fafc22; }",
+                            "</style>",
+                            "<table class=\"custom-table\">",
+                            "<thead>",
+                            "<tr>",
+                            "<th>공장</th>",
+                            "<th>신규분류요약</th>",
+                            "<th>총 생산 SKU</th>",
+                            "<th>규격 대응 SKU</th>",
+                            "<th>규격 대응률(%)</th>",
+                            "</tr>",
+                            "</thead>",
+                            "<tbody>",
+                        ]
+                        html_parts.append("\n".join(header_lines) + "\n")
+
+                        grouped = sku_counts_fmt.groupby("공장", sort=False)
+                        for factory_name, group in grouped:
+                            rowspan = len(group)
+                            for idx, row in group.iterrows():
+                                html_parts.append("<tr>")
+                                if idx == group.index[0]:
+                                    html_parts.append(f"<td rowspan='{rowspan}' style='vertical-align: middle; font-weight: 600;'>{factory_name}</td>")
+                                html_parts.append(f"<td>{row['신규분류요약']}</td>")
+                                html_parts.append(f"<td class='number'>{row['생산SKU수']}</td>")
+                                html_parts.append(f"<td class='number'>{row['필요대응SKU수']}</td>")
+                                html_parts.append(f"<td class='number'>{row['규격대응률(%)']}</td>")
+                                html_parts.append("</tr>")
+
+                        html_parts.append("</tbody></table>")
+                        st.markdown("".join(html_parts), unsafe_allow_html=True)
         else:
             # 공장_신규분류별 통합 현황
             combined_metric_option = metric_option if metric_option in {"정확 대응 비중", "초과 생산 비중", "비정형 생산 비중"} else "정확 대응 비중"
