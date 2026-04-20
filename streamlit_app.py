@@ -410,6 +410,8 @@ try:
             sub=f"수량: {waste_prod:,} pcs",
         )
 
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
     with st.expander("지표 정의/상세 보기", expanded=False):
         st.markdown(
             "- `규격 대응률` : 일자별 `(필요 SKU ∩ 생산 SKU) ÷ 생산 SKU` 의 비율\n"
@@ -589,93 +591,142 @@ try:
         if not sku_coverage_available:
             st.caption("Tip: 공장별 `규격 대응률(SKU 기준)`은 `매칭결과` 시트에 `공장` 컬럼이 있어야 계산 가능합니다.")
 
-        # 공장_신규분류별 통합 현황
-        combined_metric_option = metric_option if metric_option in {"정확 대응 비중", "초과 생산 비중", "비정형 생산 비중"} else "정확 대응 비중"
-        combined_summary = factory_summary_filtered.groupby(["공장", "신규분류요약"], dropna=False).agg({
-            "총실적": "sum",
-            "유효생산량": "sum",
-            "과생산량": "sum",
-            "불필요생산량": "sum"
-        }).reset_index()
+        if metric_option == "규격 대응률":
+            st.markdown("**공장별 SKU 기준 요약**")
+            if not sku_coverage_available:
+                st.info("공장별 SKU 집계가 불가합니다: `매칭결과` 시트에 `공장` 컬럼이 필요합니다.")
+            else:
+                sku_table = factory_data[["공장", "생산SKU수", "필요대응SKU수", "규격대응률(%)"]].copy()
 
-        # 비율 계산
-        combined_summary["유효비율(%)"] = (combined_summary["유효생산량"] / combined_summary["총실적"] * 100).fillna(0)
-        combined_summary["과생산비율(%)"] = (combined_summary["과생산량"] / combined_summary["총실적"] * 100).fillna(0)
-        combined_summary["불필요비율(%)"] = (combined_summary["불필요생산량"] / combined_summary["총실적"] * 100).fillna(0)
+                factory_order = {"A관(1공장)": 1, "C관(2공장)": 2, "S관(3공장)": 3}
+                sku_table["_factory_sort"] = sku_table["공장"].map(factory_order)
+                sku_table = sku_table.sort_values(["_factory_sort", "공장"]).reset_index(drop=True).drop("_factory_sort", axis=1)
 
-        combined_summary["유효 대응률(수량)(%)"] = combined_summary["유효비율(%)"]
+                sku_table["생산SKU수"] = sku_table["생산SKU수"].map("{:,.0f}".format)
+                sku_table["필요대응SKU수"] = sku_table["필요대응SKU수"].map("{:,.0f}".format)
+                sku_table["규격대응률(%)"] = sku_table["규격대응률(%)"].map("{:.1f}%".format)
 
-        # 선택지표 추가 (공장 비교 지표와 동일 3종)
-        metric_map = {
-            "정확 대응 비중": ("유효비율(%)", "유효생산량"),
-            "초과 생산 비중": ("과생산비율(%)", "과생산량"),
-            "비정형 생산 비중": ("불필요비율(%)", "불필요생산량"),
-        }
-        metric_col, pcs_col = metric_map[combined_metric_option]
-        combined_summary["선택지표"] = combined_summary[metric_col].fillna(0)
+                html_parts = []
+                header_lines = [
+                    "<style>",
+                    ".custom-table { width: 100%; border-collapse: collapse; font-size: 14px; }",
+                    ".custom-table th, .custom-table td { padding: 10px 12px; border: 1px solid #e2e8f0; }",
+                    ".custom-table th { background: #f8fafc; color: #111827; text-align: left; }",
+                    ".custom-table td { vertical-align: middle; }",
+                    ".custom-table td.number { text-align: right; }",
+                    ".custom-table tbody tr:nth-child(even) { background: #f8fafc22; }",
+                    "</style>",
+                    "<table class=\"custom-table\">",
+                    "<thead>",
+                    "<tr>",
+                    "<th>공장</th>",
+                    "<th>총 생산 SKU</th>",
+                    "<th>규격 대응 SKU</th>",
+                    "<th>규격 대응률(%)</th>",
+                    "</tr>",
+                    "</thead>",
+                    "<tbody>",
+                ]
+                html_parts.append("\n".join(header_lines) + "\n")
 
-        # 테이블 표시
-        base_cols = ["공장", "신규분류요약", "총실적"]
-        display_combined = combined_summary[base_cols + [pcs_col, "선택지표"]].copy()
-        total_hdr = f"{KPI_LABEL_MAP['총실적']} (pcs)"
-        pcs_hdr = f"{KPI_LABEL_MAP[pcs_col]} (pcs)"
-        rate_hdr = f"{combined_metric_option} (%)"
-        display_combined.columns = ["공장", "신규분류요약", total_hdr, pcs_hdr, rate_hdr]
+                for _, row in sku_table.iterrows():
+                    html_parts.append("<tr>")
+                    html_parts.append(f"<td style='font-weight: 600;'>{row['공장']}</td>")
+                    html_parts.append(f"<td class='number'>{row['생산SKU수']}</td>")
+                    html_parts.append(f"<td class='number'>{row['필요대응SKU수']}</td>")
+                    html_parts.append(f"<td class='number'>{row['규격대응률(%)']}</td>")
+                    html_parts.append("</tr>")
 
-        # 공장 순서 지정 (A관 > C관 > S관)
-        factory_order = {"A관(1공장)": 1, "C관(2공장)": 2, "S관(3공장)": 3}
-        display_combined["_factory_sort"] = display_combined["공장"].map(factory_order)
-        display_combined = display_combined.sort_values(["_factory_sort", "신규분류요약"]).reset_index(drop=True)
-        display_combined = display_combined.drop("_factory_sort", axis=1)
+                html_parts.append("</tbody></table>")
+                st.markdown("".join(html_parts), unsafe_allow_html=True)
+        else:
+            # 공장_신규분류별 통합 현황
+            combined_metric_option = metric_option if metric_option in {"정확 대응 비중", "초과 생산 비중", "비정형 생산 비중"} else "정확 대응 비중"
+            combined_summary = factory_summary_filtered.groupby(["공장", "신규분류요약"], dropna=False).agg({
+                "총실적": "sum",
+                "유효생산량": "sum",
+                "과생산량": "sum",
+                "불필요생산량": "sum"
+            }).reset_index()
 
-        display_combined[total_hdr] = display_combined[total_hdr].map("{:,.0f}".format)
-        display_combined[pcs_hdr] = display_combined[pcs_hdr].map("{:,.0f}".format)
-        display_combined[rate_hdr] = display_combined[rate_hdr].map("{:.1f}%".format)
+            # 비율 계산
+            combined_summary["유효비율(%)"] = (combined_summary["유효생산량"] / combined_summary["총실적"] * 100).fillna(0)
+            combined_summary["과생산비율(%)"] = (combined_summary["과생산량"] / combined_summary["총실적"] * 100).fillna(0)
+            combined_summary["불필요비율(%)"] = (combined_summary["불필요생산량"] / combined_summary["총실적"] * 100).fillna(0)
 
-        html_parts = []
-        # NOTE: Markdown에서는 4칸 이상 들여쓰기된 HTML이 코드블록으로 취급될 수 있어,
-        # 모든 라인을 "맨 앞 공백 없이" 생성합니다.
-        header_lines = [
-            "<style>",
-            ".custom-table { width: 100%; border-collapse: collapse; font-size: 14px; }",
-            ".custom-table th, .custom-table td { padding: 10px 12px; border: 1px solid #e2e8f0; }",
-            ".custom-table th { background: #f8fafc; color: #111827; text-align: left; }",
-            ".custom-table td { vertical-align: middle; }",
-            ".custom-table td.number { text-align: right; }",
-            ".custom-table tbody tr:nth-child(even) { background: #f8fafc22; }",
-            "</style>",
-            "<table class=\"custom-table\">",
-            "<thead>",
-            "<tr>",
-            "<th>공장</th>",
-            "<th>신규분류요약</th>",
-            f"<th>{total_hdr}</th>",
-        ]
-        header_lines.extend(
-            [
-                f"<th>{pcs_hdr}</th>",
-                f"<th>{rate_hdr}</th>",
-                "</tr>",
-                "</thead>",
-                "<tbody>",
+            combined_summary["유효 대응률(수량)(%)"] = combined_summary["유효비율(%)"]
+
+            # 선택지표 추가 (공장 비교 지표와 동일 3종)
+            metric_map = {
+                "정확 대응 비중": ("유효비율(%)", "유효생산량"),
+                "초과 생산 비중": ("과생산비율(%)", "과생산량"),
+                "비정형 생산 비중": ("불필요비율(%)", "불필요생산량"),
+            }
+            metric_col, pcs_col = metric_map[combined_metric_option]
+            combined_summary["선택지표"] = combined_summary[metric_col].fillna(0)
+
+            # 테이블 표시
+            base_cols = ["공장", "신규분류요약", "총실적"]
+            display_combined = combined_summary[base_cols + [pcs_col, "선택지표"]].copy()
+            total_hdr = f"{KPI_LABEL_MAP['총실적']} (pcs)"
+            pcs_hdr = f"{KPI_LABEL_MAP[pcs_col]} (pcs)"
+            rate_hdr = f"{combined_metric_option} (%)"
+            display_combined.columns = ["공장", "신규분류요약", total_hdr, pcs_hdr, rate_hdr]
+
+            # 공장 순서 지정 (A관 > C관 > S관)
+            factory_order = {"A관(1공장)": 1, "C관(2공장)": 2, "S관(3공장)": 3}
+            display_combined["_factory_sort"] = display_combined["공장"].map(factory_order)
+            display_combined = display_combined.sort_values(["_factory_sort", "신규분류요약"]).reset_index(drop=True)
+            display_combined = display_combined.drop("_factory_sort", axis=1)
+
+            display_combined[total_hdr] = display_combined[total_hdr].map("{:,.0f}".format)
+            display_combined[pcs_hdr] = display_combined[pcs_hdr].map("{:,.0f}".format)
+            display_combined[rate_hdr] = display_combined[rate_hdr].map("{:.1f}%".format)
+
+            html_parts = []
+            # NOTE: Markdown에서는 4칸 이상 들여쓰기된 HTML이 코드블록으로 취급될 수 있어,
+            # 모든 라인을 "맨 앞 공백 없이" 생성합니다.
+            header_lines = [
+                "<style>",
+                ".custom-table { width: 100%; border-collapse: collapse; font-size: 14px; }",
+                ".custom-table th, .custom-table td { padding: 10px 12px; border: 1px solid #e2e8f0; }",
+                ".custom-table th { background: #f8fafc; color: #111827; text-align: left; }",
+                ".custom-table td { vertical-align: middle; }",
+                ".custom-table td.number { text-align: right; }",
+                ".custom-table tbody tr:nth-child(even) { background: #f8fafc22; }",
+                "</style>",
+                "<table class=\"custom-table\">",
+                "<thead>",
+                "<tr>",
+                "<th>공장</th>",
+                "<th>신규분류요약</th>",
+                f"<th>{total_hdr}</th>",
             ]
-        )
-        html_parts.append("\n".join(header_lines) + "\n")
+            header_lines.extend(
+                [
+                    f"<th>{pcs_hdr}</th>",
+                    f"<th>{rate_hdr}</th>",
+                    "</tr>",
+                    "</thead>",
+                    "<tbody>",
+                ]
+            )
+            html_parts.append("\n".join(header_lines) + "\n")
 
-        grouped = display_combined.groupby("공장", sort=False)
-        for factory_name, group in grouped:
-            rowspan = len(group)
-            for idx, row in group.iterrows():
-                html_parts.append("<tr>")
-                if idx == group.index[0]:
-                    html_parts.append(f"<td rowspan='{rowspan}' style='vertical-align: middle; font-weight: 600;'>{factory_name}</td>")
-                html_parts.append(f"<td>{row['신규분류요약']}</td>")
-                html_parts.append(f"<td class='number'>{row[total_hdr]}</td>")
-                html_parts.append(f"<td class='number'>{row[pcs_hdr]}</td>")
-                html_parts.append(f"<td class='number'>{row[rate_hdr]}</td>")
-                html_parts.append("</tr>")
-        html_parts.append("</tbody></table>")
-        st.markdown("".join(html_parts), unsafe_allow_html=True)
+            grouped = display_combined.groupby("공장", sort=False)
+            for factory_name, group in grouped:
+                rowspan = len(group)
+                for idx, row in group.iterrows():
+                    html_parts.append("<tr>")
+                    if idx == group.index[0]:
+                        html_parts.append(f"<td rowspan='{rowspan}' style='vertical-align: middle; font-weight: 600;'>{factory_name}</td>")
+                    html_parts.append(f"<td>{row['신규분류요약']}</td>")
+                    html_parts.append(f"<td class='number'>{row[total_hdr]}</td>")
+                    html_parts.append(f"<td class='number'>{row[pcs_hdr]}</td>")
+                    html_parts.append(f"<td class='number'>{row[rate_hdr]}</td>")
+                    html_parts.append("</tr>")
+            html_parts.append("</tbody></table>")
+            st.markdown("".join(html_parts), unsafe_allow_html=True)
 
     # ============== 일별 요약 ==============
     st.markdown("### 📊 일별 요약")
