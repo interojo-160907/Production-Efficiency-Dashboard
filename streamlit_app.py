@@ -595,8 +595,6 @@ try:
             if not sku_coverage_available:
                 st.info("공장별 SKU 집계가 불가합니다: `매칭결과` 시트에 `공장` 컬럼이 필요합니다.")
             else:
-                st.markdown("**공장-신규분류 SKU 기준 상세**")
-
                 if matching_result is None or len(matching_result) == 0 or not {"공장", "신규분류요약", "제품코드", "양품수량", "부족수량", "유효생산량", "날짜_date"}.issubset(set(matching_result.columns)):
                     st.info("신규분류 기준 SKU 상세 집계를 위해 `매칭결과`에 `공장/신규분류요약/제품코드/수량/날짜` 컬럼이 필요합니다.")
                 else:
