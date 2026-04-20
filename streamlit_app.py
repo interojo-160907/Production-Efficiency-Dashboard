@@ -592,55 +592,9 @@ try:
             st.caption("Tip: 공장별 `규격 대응률(SKU 기준)`은 `매칭결과` 시트에 `공장` 컬럼이 있어야 계산 가능합니다.")
 
         if metric_option == "규격 대응률":
-            st.markdown("**공장별 SKU 기준 요약**")
             if not sku_coverage_available:
                 st.info("공장별 SKU 집계가 불가합니다: `매칭결과` 시트에 `공장` 컬럼이 필요합니다.")
             else:
-                sku_table = factory_data[["공장", "생산SKU수", "필요대응SKU수", "규격대응률(%)"]].copy()
-
-                factory_order = {"A관(1공장)": 1, "C관(2공장)": 2, "S관(3공장)": 3}
-                sku_table["_factory_sort"] = sku_table["공장"].map(factory_order)
-                sku_table = sku_table.sort_values(["_factory_sort", "공장"]).reset_index(drop=True).drop("_factory_sort", axis=1)
-
-                sku_table["생산SKU수"] = sku_table["생산SKU수"].map("{:,.0f}".format)
-                sku_table["필요대응SKU수"] = sku_table["필요대응SKU수"].map("{:,.0f}".format)
-                sku_table["규격대응률(%)"] = sku_table["규격대응률(%)"].map("{:.1f}%".format)
-
-                html_parts = []
-                header_lines = [
-                    "<style>",
-                    ".custom-table { width: 100%; border-collapse: collapse; font-size: 14px; }",
-                    ".custom-table th, .custom-table td { padding: 10px 12px; border: 1px solid #e2e8f0; }",
-                    ".custom-table th { background: #f8fafc; color: #111827; text-align: left; }",
-                    ".custom-table td { vertical-align: middle; }",
-                    ".custom-table td.number { text-align: right; }",
-                    ".custom-table tbody tr:nth-child(even) { background: #f8fafc22; }",
-                    "</style>",
-                    "<table class=\"custom-table\">",
-                    "<thead>",
-                    "<tr>",
-                    "<th>공장</th>",
-                    "<th>총 생산 SKU</th>",
-                    "<th>규격 대응 SKU</th>",
-                    "<th>규격 대응률(%)</th>",
-                    "</tr>",
-                    "</thead>",
-                    "<tbody>",
-                ]
-                html_parts.append("\n".join(header_lines) + "\n")
-
-                for _, row in sku_table.iterrows():
-                    html_parts.append("<tr>")
-                    html_parts.append(f"<td style='font-weight: 600;'>{row['공장']}</td>")
-                    html_parts.append(f"<td class='number'>{row['생산SKU수']}</td>")
-                    html_parts.append(f"<td class='number'>{row['필요대응SKU수']}</td>")
-                    html_parts.append(f"<td class='number'>{row['규격대응률(%)']}</td>")
-                    html_parts.append("</tr>")
-
-                html_parts.append("</tbody></table>")
-                st.markdown("".join(html_parts), unsafe_allow_html=True)
-
-                st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
                 st.markdown("**공장-신규분류 SKU 기준 상세**")
 
                 if matching_result is None or len(matching_result) == 0 or not {"공장", "신규분류요약", "제품코드", "양품수량", "부족수량", "유효생산량", "날짜_date"}.issubset(set(matching_result.columns)):
@@ -689,6 +643,7 @@ try:
                         )
                         sku_counts["규격대응률(%)"] = sku_counts["규격대응률(%)"].clip(0, 100)
 
+                        factory_order = {"A관(1공장)": 1, "C관(2공장)": 2, "S관(3공장)": 3}
                         sku_counts["_factory_sort"] = sku_counts["공장"].map(factory_order)
                         sku_counts = sku_counts.sort_values(["_factory_sort", "신규분류요약"]).reset_index(drop=True).drop("_factory_sort", axis=1)
 
