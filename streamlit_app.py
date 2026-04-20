@@ -854,6 +854,12 @@ try:
         if len(factory_summary_filtered) == 0:
             st.info("선택한 기간에 공장별 데이터가 없습니다.")
         else:
+            st.info(
+                "관별(공장별) `필요 수량`은 `매칭결과`(=생산이 발생한 SKU 기준)에서 계산된 값이라, "
+                "해당 일자에 **생산이 전혀 없던 SKU의 필요 수량(=전사 일별 필요 수량에는 포함됨)** 은 공장별로 배정되지 않습니다. "
+                "그래서 관별 합계를 내도 일별 필요 수량과 일치하지 않을 수 있습니다."
+            )
+
             factory_daily = factory_summary_filtered.groupby(["생산일자_date", "공장"], dropna=False).agg({
                 "총실적": "sum",
                 "총부족수량": "sum",
@@ -862,9 +868,73 @@ try:
                 "불필요생산량": "sum",
             }).reset_index()
 
+            # 전사(일별요약) 필요 수량 vs 관별(공장별, 생산SKU 기준) 필요 수량 합계 비교
+            try:
+                daily_need_by_day = (
+                    daily_summary_filtered.groupby("날짜_date", dropna=False)["총부족수량"]
+                    .sum()
+                    .rename("일별 필요 수량(pcs)")
+                    .rename_axis("날짜")
+                )
+                factory_need_by_day = (
+                    factory_daily.groupby("생산일자_date", dropna=False)["총부족수량"]
+                    .sum()
+                    .rename("관별 필요 수량 합계(생산SKU) (pcs)")
+                    .rename_axis("날짜")
+                )
+                need_compare = (
+                    pd.concat([daily_need_by_day, factory_need_by_day], axis=1)
+                    .fillna(0)
+                    .reset_index()
+                )
+                need_compare["미배정 필요 수량(pcs)"] = (
+                    need_compare["일별 필요 수량(pcs)"] - need_compare["관별 필요 수량 합계(생산SKU) (pcs)"]
+                )
+                need_compare["날짜"] = pd.to_datetime(need_compare["날짜"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+                st.dataframe(
+                    need_compare.style.format(
+                        {
+                            "일별 필요 수량(pcs)": "{:,.0f}",
+                            "관별 필요 수량 합계(생산SKU) (pcs)": "{:,.0f}",
+                            "미배정 필요 수량(pcs)": "{:,.0f}",
+                        }
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            except Exception:
+                # 비교 테이블 생성 실패해도 본 테이블은 계속 표시
+                pass
+
             factory_daily[RATE_LABEL_MAP["유효비율(%)"]] = (factory_daily["유효생산량"] / factory_daily["총실적"] * 100).replace([np.inf, -np.inf], 0).fillna(0)
             factory_daily[RATE_LABEL_MAP["과생산비율(%)"]] = (factory_daily["과생산량"] / factory_daily["총실적"] * 100).replace([np.inf, -np.inf], 0).fillna(0)
             factory_daily[RATE_LABEL_MAP["불필요비율(%)"]] = (factory_daily["불필요생산량"] / factory_daily["총실적"] * 100).replace([np.inf, -np.inf], 0).fillna(0)
+
+            # 생산이 없던 SKU의 필요 수량(전사 일별 필요 수량에는 포함)을 '미배정'으로 표시
+            try:
+                daily_need_all = daily_summary_filtered.groupby("날짜_date", dropna=False)["총부족수량"].sum()
+                factory_need_prod_sku = factory_daily.groupby("생산일자_date", dropna=False)["총부족수량"].sum()
+                unassigned_need = (daily_need_all - factory_need_prod_sku).fillna(0)
+                unassigned_need = unassigned_need[unassigned_need != 0]
+                if len(unassigned_need) > 0:
+                    unassigned_rows = pd.DataFrame(
+                        {
+                            "생산일자_date": unassigned_need.index,
+                            "공장": "미배정(미생산 SKU)",
+                            "총실적": 0,
+                            "총부족수량": unassigned_need.values,
+                            "유효생산량": 0,
+                            "과생산량": 0,
+                            "불필요생산량": 0,
+                            RATE_LABEL_MAP["유효비율(%)"]: 0,
+                            RATE_LABEL_MAP["과생산비율(%)"]: 0,
+                            RATE_LABEL_MAP["불필요비율(%)"]: 0,
+                        }
+                    )
+                    factory_daily = pd.concat([factory_daily, unassigned_rows], ignore_index=True)
+            except Exception:
+                pass
 
             # 관별(공장별) 일자 규격 대응률(SKU 기준)
             factory_daily_spec = None
@@ -912,10 +982,11 @@ try:
                 factory_daily_spec_by_day = shortage_prod_daily[["날짜_date", "규격대응률(%)"]].copy()
                 factory_daily_spec_by_day.rename(columns={"날짜_date": "날짜", "규격대응률(%)": "규격 대응률(%)"}, inplace=True)
 
+            factory_need_label = "필요 수량(생산SKU) (pcs)"
             factory_daily_display = factory_daily.rename(columns={
                 "생산일자_date": "날짜",
                 "총실적": f"{KPI_LABEL_MAP['총실적']} (pcs)",
-                "총부족수량": f"{KPI_LABEL_MAP['총부족수량']} (pcs)",
+                "총부족수량": factory_need_label,
                 "유효생산량": f"{KPI_LABEL_MAP['유효생산량']} (pcs)",
                 "과생산량": f"{KPI_LABEL_MAP['과생산량']} (pcs)",
                 "불필요생산량": f"{KPI_LABEL_MAP['불필요생산량']} (pcs)",
@@ -946,7 +1017,7 @@ try:
             factory_daily_display["날짜"] = pd.to_datetime(factory_daily_display["날짜"], errors="coerce").dt.strftime("%Y-%m-%d")
 
             # 공장 순서 지정 (A관 > C관 > S관)
-            factory_order = {"A관(1공장)": 1, "C관(2공장)": 2, "S관(3공장)": 3}
+            factory_order = {"A관(1공장)": 1, "C관(2공장)": 2, "S관(3공장)": 3, "미배정(미생산 SKU)": 99}
             factory_daily_display["_factory_sort"] = factory_daily_display["공장"].map(factory_order)
             factory_daily_display = factory_daily_display.sort_values(["날짜", "_factory_sort", "공장"]).drop(columns=["_factory_sort"]).reset_index(drop=True)
 
@@ -955,7 +1026,7 @@ try:
                 "날짜",
                 "공장",
                 f"{KPI_LABEL_MAP['총실적']} (pcs)",
-                f"{KPI_LABEL_MAP['총부족수량']} (pcs)",
+                factory_need_label,
                 "규격 대응률(%)",
             ]
             factory_daily_cols.extend(
@@ -973,7 +1044,7 @@ try:
             st.dataframe(
                 factory_daily_display.style.format({
                     f"{KPI_LABEL_MAP['총실적']} (pcs)": "{:,.0f}",
-                    f"{KPI_LABEL_MAP['총부족수량']} (pcs)": "{:,.0f}",
+                    factory_need_label: "{:,.0f}",
                     f"{KPI_LABEL_MAP['유효생산량']} (pcs)": "{:,.0f}",
                     f"{KPI_LABEL_MAP['과생산량']} (pcs)": "{:,.0f}",
                     f"{KPI_LABEL_MAP['불필요생산량']} (pcs)": "{:,.0f}",
