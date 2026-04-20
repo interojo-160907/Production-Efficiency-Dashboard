@@ -269,16 +269,16 @@ try:
                 .fillna(0)
                 .reset_index()
             )
-        shortage_prod_daily["규격대응률(%)"] = np.where(
-            shortage_prod_daily["생산SKU수"] > 0,
-            shortage_prod_daily["필요대응SKU수"] / shortage_prod_daily["생산SKU수"] * 100,
-            0,
-        )
-        shortage_prod_daily["규격대응률(%)"] = shortage_prod_daily["규격대응률(%)"].clip(0, 100)
-        shortage_prod_daily = shortage_prod_daily.sort_values("날짜_date").reset_index(drop=True)
-        produced_skus_total = float(shortage_prod_daily["생산SKU수"].sum())
-        need_responded_skus_total = float(shortage_prod_daily["필요대응SKU수"].sum())
-        shortage_prod_rate = (need_responded_skus_total / produced_skus_total * 100) if produced_skus_total > 0 else None
+            shortage_prod_daily["규격대응률(%)"] = np.where(
+                shortage_prod_daily["생산SKU수"] > 0,
+                shortage_prod_daily["필요대응SKU수"] / shortage_prod_daily["생산SKU수"] * 100,
+                0,
+            )
+            shortage_prod_daily["규격대응률(%)"] = shortage_prod_daily["규격대응률(%)"].clip(0, 100)
+            shortage_prod_daily = shortage_prod_daily.sort_values("날짜_date").reset_index(drop=True)
+            produced_skus_total = float(shortage_prod_daily["생산SKU수"].sum())
+            need_responded_skus_total = float(shortage_prod_daily["필요대응SKU수"].sum())
+            shortage_prod_rate = (need_responded_skus_total / produced_skus_total * 100) if produced_skus_total > 0 else None
 
     col1, col2, col3, col4, col5 = st.columns([2.2, 1.3, 1.1, 1.1, 1.1])
     with col1:
@@ -419,9 +419,11 @@ try:
                 sku_coverage_available = True
 
         # NOTE: 규격 대응률은 메인 지표이므로 항상 노출합니다.
-        # 계산이 불가한 경우(예: 매칭결과에 공장 없음)에는 0으로 표시하고 안내문을 출력합니다.
+        # 계산이 불가한 경우(예: 매칭결과에 공장 없음)에는 "전사 규격 대응률"을 동일 적용해 표시합니다.
         if "규격대응률(%)" not in factory_data.columns:
-            factory_data["규격대응률(%)"] = 0.0
+            factory_data["규격대응률(%)"] = np.nan
+        if not sku_coverage_available:
+            factory_data["규격대응률(%)"] = float(shortage_prod_rate) if shortage_prod_rate is not None else np.nan
         metric_choices = ["규격 대응률", "정확 대응 비중", "초과 생산 비중", "비정형 생산 비중"]
         radio_key = "factory_metric_option"
         if radio_key not in st.session_state or st.session_state[radio_key] not in metric_choices:
@@ -444,7 +446,7 @@ try:
         metric_col, pcs_col = metric_map[metric_option]
         factory_data["선택지표"] = factory_data[metric_col].replace([np.inf, -np.inf], 0).fillna(0)
         if metric_option == "규격 대응률" and not sku_coverage_available:
-            st.warning("공장별 `규격 대응률(SKU 기준)` 계산 불가: `매칭결과` 시트에 `공장` 컬럼이 없습니다. (현재는 0으로 표시)")
+            st.warning("공장별 `규격 대응률(SKU 기준)` 계산 불가: `매칭결과` 시트에 `공장` 컬럼이 없습니다. (전사 규격 대응률을 동일 적용해 표시)")
 
         hover_data = {
             "총실적": ":,",
@@ -671,6 +673,7 @@ try:
 
             # 관별(공장별) 일자 규격 대응률(SKU 기준)
             factory_daily_spec = None
+            factory_daily_spec_by_day = None
             if matching_result is not None and {"공장", "제품코드", "양품수량", "부족수량", "유효생산량", "날짜_date"}.issubset(set(matching_result.columns)):
                 mf = matching_result[
                     (matching_result["날짜_date"] >= start_date) &
@@ -710,6 +713,9 @@ try:
                     )
                     factory_daily_spec["규격 대응률(%)"] = factory_daily_spec["규격 대응률(%)"].clip(0, 100)
                     factory_daily_spec = factory_daily_spec[["날짜_date", "공장", "규격 대응률(%)"]]
+            elif shortage_prod_daily is not None and len(shortage_prod_daily) > 0:
+                factory_daily_spec_by_day = shortage_prod_daily[["날짜_date", "규격대응률(%)"]].copy()
+                factory_daily_spec_by_day.rename(columns={"날짜_date": "날짜", "규격대응률(%)": "규격 대응률(%)"}, inplace=True)
 
             factory_daily_display = factory_daily.rename(columns={
                 "생산일자_date": "날짜",
@@ -724,6 +730,13 @@ try:
                 factory_daily_display = factory_daily_display.merge(
                     factory_daily_spec.rename(columns={"날짜_date": "날짜"}),
                     on=["날짜", "공장"],
+                    how="left",
+                )
+            elif factory_daily_spec_by_day is not None and len(factory_daily_spec_by_day) > 0:
+                st.warning("관별(공장별) `규격 대응률(SKU 기준)` 계산 불가: `매칭결과` 시트에 `공장` 컬럼이 없습니다. (전사 일자 규격 대응률을 동일 적용해 표시)")
+                factory_daily_display = factory_daily_display.merge(
+                    factory_daily_spec_by_day,
+                    on=["날짜"],
                     how="left",
                 )
 
