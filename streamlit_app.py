@@ -15,15 +15,6 @@ def _month_end(d: datetime.date) -> datetime.date:
     return datetime(d.year, d.month, last_day).date()
 
 
-def _choose_time_bucket(start_d: datetime.date, end_d: datetime.date) -> str:
-    span_days = (end_d - start_d).days + 1
-    if span_days <= 62:
-        return "D"
-    if span_days <= 180:
-        return "W"
-    return "M"
-
-
 def _period_start(ts: pd.Series, bucket: str) -> pd.Series:
     if bucket == "D":
         return ts.dt.normalize()
@@ -44,6 +35,28 @@ def _build_axis(start_d: datetime.date, end_d: datetime.date, bucket: str) -> pd
     start_ms = start_ts.to_period("M").to_timestamp()
     end_ms = end_ts.to_period("M").to_timestamp()
     return pd.date_range(start_ms, end_ms, freq="MS")
+
+
+def _build_tick_labels(axis: pd.DatetimeIndex, bucket: str) -> tuple[list[pd.Timestamp], list[str]]:
+    tickvals = [pd.Timestamp(x) for x in axis.to_list()]
+    if bucket == "D":
+        ticktext = [x.strftime("%m-%d") for x in tickvals]
+        return tickvals, ticktext
+    if bucket == "W":
+        years = {x.year for x in tickvals}
+        iso_weeks = pd.Series(tickvals).dt.isocalendar().week.astype(int).tolist()
+        if len(years) > 1:
+            ticktext = [f"{x.year % 100:02d}W{w}" for x, w in zip(tickvals, iso_weeks, strict=False)]
+        else:
+            ticktext = [f"W{w}" for w in iso_weeks]
+        return tickvals, ticktext
+    # bucket == "M"
+    years = {x.year for x in tickvals}
+    if len(years) > 1:
+        ticktext = [f"{x.year}-{x.month}월" for x in tickvals]
+    else:
+        ticktext = [f"{x.month}월" for x in tickvals]
+    return tickvals, ticktext
 
 # 페이지 설정
 DASHBOARD_TITLE = "생산 운영 현황 대시보드"
@@ -733,8 +746,18 @@ try:
         if filter_option == "당월":
             display_end_date = _month_end(display_start_date)
 
-        bucket = _choose_time_bucket(display_start_date, display_end_date) if filter_option == "기간조회" else "D"
+        if filter_option in {"당월", "전월"}:
+            bucket = "D"
+        else:
+            span_days = (display_end_date - display_start_date).days + 1
+            if span_days <= 30:
+                bucket = "D"
+            elif span_days <= 210:
+                bucket = "W"
+            else:
+                bucket = "M"
         axis = _build_axis(display_start_date, display_end_date, bucket)
+        tickvals, ticktext = _build_tick_labels(axis, bucket)
 
         factories = [f for f in factory_data["공장"].dropna().astype(str).unique().tolist()]
         ts_rows: list[dict] = []
@@ -836,12 +859,17 @@ try:
                 title=f"공장별 {metric_option} 추이",
                 markers=False,
             )
-            tickformat = "%m-%d" if bucket in {"D", "W"} else "%Y-%m"
             line_fig.update_layout(
                 height=360,
                 margin=dict(l=0, r=0, t=60, b=0),
                 yaxis=dict(range=[0, 105], title=f"{metric_option} (%)"),
-                xaxis=dict(tickformat=tickformat),
+                xaxis=dict(
+                    tickmode="array",
+                    tickvals=tickvals,
+                    ticktext=ticktext,
+                    tickangle=-45,
+                    tickfont=dict(size=10),
+                ),
                 legend_title_text="공장",
             )
             st.plotly_chart(line_fig, use_container_width=True)
