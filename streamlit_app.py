@@ -1,5 +1,6 @@
 ﻿import os
 from pathlib import Path
+import calendar
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import numpy as np
@@ -7,6 +8,42 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
+
+
+def _month_end(d: datetime.date) -> datetime.date:
+    last_day = calendar.monthrange(d.year, d.month)[1]
+    return datetime(d.year, d.month, last_day).date()
+
+
+def _choose_time_bucket(start_d: datetime.date, end_d: datetime.date) -> str:
+    span_days = (end_d - start_d).days + 1
+    if span_days <= 62:
+        return "D"
+    if span_days <= 180:
+        return "W"
+    return "M"
+
+
+def _period_start(ts: pd.Series, bucket: str) -> pd.Series:
+    if bucket == "D":
+        return ts.dt.normalize()
+    if bucket == "W":
+        return ts.dt.normalize() - pd.to_timedelta(ts.dt.weekday, unit="D")
+    return ts.dt.to_period("M").dt.to_timestamp()
+
+
+def _build_axis(start_d: datetime.date, end_d: datetime.date, bucket: str) -> pd.DatetimeIndex:
+    start_ts = pd.Timestamp(start_d)
+    end_ts = pd.Timestamp(end_d)
+    if bucket == "D":
+        return pd.date_range(start_ts, end_ts, freq="D")
+    if bucket == "W":
+        start_monday = start_ts.normalize() - pd.to_timedelta(start_ts.weekday(), unit="D")
+        end_monday = end_ts.normalize() - pd.to_timedelta(end_ts.weekday(), unit="D")
+        return pd.date_range(start_monday, end_monday, freq="W-MON")
+    start_ms = start_ts.to_period("M").to_timestamp()
+    end_ms = end_ts.to_period("M").to_timestamp()
+    return pd.date_range(start_ms, end_ms, freq="MS")
 
 # 페이지 설정
 DASHBOARD_TITLE = "생산 운영 현황 대시보드"
@@ -344,8 +381,8 @@ try:
 
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
-    # 기간 필터
-    filter_option = st.radio("조회 기간", ["전체", "당월", "전월", "기간조회"], horizontal=True, label_visibility="collapsed")
+    # 기간 필터 (기본: 당월)
+    filter_option = st.radio("조회 기간", ["당월", "전월", "기간조회"], horizontal=True, label_visibility="collapsed")
 
     # 날짜 범위 계산
     current_month_start = datetime(today.year, today.month, 1).date()
@@ -359,20 +396,12 @@ try:
     last_day_prev = first_day_current - pd.Timedelta(days=1)
     prev_month_start = datetime(last_day_prev.year, last_day_prev.month, 1).date()
 
-    # 전체 기간(데이터 기준) 계산
+    # 전체 기간(데이터 기준) 계산 (기간조회 범위 제한용)
     full_min_date = daily_summary[daily_summary["날짜_date"] != today]["날짜_date"].min()
     full_max_date = daily_summary[daily_summary["날짜_date"] != today]["날짜_date"].max()
 
     # 날짜 범위 결정
-    if filter_option == "전체":
-        if pd.isna(full_min_date) or pd.isna(full_max_date):
-            st.warning("선택 가능한 날짜 범위를 계산할 수 없습니다. (데이터 없음)")
-            start_date = today
-            end_date = today
-        else:
-            start_date = full_min_date
-            end_date = full_max_date
-    elif filter_option == "당월":
+    if filter_option == "당월":
         start_date = current_month_start
         end_date = current_month_end
     elif filter_option == "전월":
@@ -697,6 +726,125 @@ try:
             title=dict(font=dict(size=22, family="Arial", color="#111111"))
         )
         st.plotly_chart(fig, use_container_width=True)
+
+        # 공장별 날짜 추이 (라인 차트)
+        display_start_date = start_date
+        display_end_date = end_date
+        if filter_option == "당월":
+            display_end_date = _month_end(display_start_date)
+
+        bucket = _choose_time_bucket(display_start_date, display_end_date) if filter_option == "기간조회" else "D"
+        axis = _build_axis(display_start_date, display_end_date, bucket)
+
+        factories = [f for f in factory_data["공장"].dropna().astype(str).unique().tolist()]
+        ts_rows: list[dict] = []
+
+        if metric_option != "규격 대응률":
+            base_ts = factory_summary_filtered[
+                ["생산일자_date", "공장", "총실적", "유효생산량", "과생산량", "불필요생산량"]
+            ].copy()
+            base_ts["date"] = pd.to_datetime(base_ts["생산일자_date"], errors="coerce")
+            base_ts = base_ts.dropna(subset=["date"])
+            base_ts["period"] = _period_start(base_ts["date"], bucket)
+            agg = base_ts.groupby(["period", "공장"], dropna=False).agg(
+                total=("총실적", "sum"),
+                valid=("유효생산량", "sum"),
+                over=("과생산량", "sum"),
+                waste=("불필요생산량", "sum"),
+            ).reset_index()
+
+            num_col = {
+                "정확 대응 비중": "valid",
+                "초과 생산 비중": "over",
+                "비정형 생산 비중": "waste",
+            }[metric_option]
+            agg["value"] = np.where(agg["total"] > 0, agg[num_col] / agg["total"] * 100, np.nan)
+            agg["value"] = pd.to_numeric(agg["value"], errors="coerce").clip(0, 100)
+
+            for _, r in agg.iterrows():
+                ts_rows.append({"기간": r["period"], "공장": r["공장"], "값": r["value"]})
+        else:
+            spec_done = False
+            required_cols_ts = {"공장", "제품코드", "양품수량", "부족수량", "유효생산량", "날짜_date"}
+            if sku_coverage_available and matching_result is not None and required_cols_ts.issubset(set(matching_result.columns)):
+                base_mf_ts = matching_result[
+                    (matching_result["날짜_date"] >= start_date) &
+                    (matching_result["날짜_date"] <= end_date) &
+                    (matching_result["날짜_date"] != today)
+                ].copy()
+                mf_ts = base_mf_ts[(base_mf_ts["공장"].notna()) & (base_mf_ts["제품코드"].notna())].copy()
+                if len(mf_ts) > 0:
+                    for col in ["양품수량", "부족수량", "유효생산량"]:
+                        mf_ts[col] = pd.to_numeric(mf_ts[col], errors="coerce").fillna(0)
+                    mf_ts["_need_qty"] = (mf_ts["유효생산량"] + mf_ts["부족수량"]).fillna(0)
+                    by_day_factory_sku_ts = mf_ts.groupby(["날짜_date", "공장", "제품코드"], dropna=False).agg(
+                        prod_qty=("양품수량", "sum"),
+                        need_qty=("_need_qty", "sum"),
+                    ).reset_index()
+                    by_day_factory_sku_ts["produced_flag"] = by_day_factory_sku_ts["prod_qty"] > 0
+                    by_day_factory_sku_ts["need_flag"] = by_day_factory_sku_ts["need_qty"] > 0
+
+                    produced_ts = (
+                        by_day_factory_sku_ts[by_day_factory_sku_ts["produced_flag"]]
+                        .groupby(["날짜_date", "공장"], dropna=False)["제품코드"]
+                        .nunique()
+                        .rename("생산SKU수")
+                    )
+                    needed_ts = (
+                        by_day_factory_sku_ts[by_day_factory_sku_ts["produced_flag"] & by_day_factory_sku_ts["need_flag"]]
+                        .groupby(["날짜_date", "공장"], dropna=False)["제품코드"]
+                        .nunique()
+                        .rename("필요대응SKU수")
+                    )
+                    day_counts_ts = pd.concat([produced_ts, needed_ts], axis=1).fillna(0).reset_index()
+                    day_counts_ts["date"] = pd.to_datetime(day_counts_ts["날짜_date"], errors="coerce")
+                    day_counts_ts = day_counts_ts.dropna(subset=["date"])
+                    day_counts_ts["period"] = _period_start(day_counts_ts["date"], bucket)
+                    agg_ts = day_counts_ts.groupby(["period", "공장"], dropna=False)[["생산SKU수", "필요대응SKU수"]].sum().reset_index()
+                    agg_ts["value"] = np.where(
+                        agg_ts["생산SKU수"] > 0,
+                        agg_ts["필요대응SKU수"] / agg_ts["생산SKU수"] * 100,
+                        np.nan,
+                    )
+                    agg_ts["value"] = pd.to_numeric(agg_ts["value"], errors="coerce").clip(0, 100)
+                    for _, r in agg_ts.iterrows():
+                        ts_rows.append({"기간": r["period"], "공장": r["공장"], "값": r["value"]})
+                    spec_done = True
+
+            if (not spec_done) and (shortage_prod_daily is not None) and (len(shortage_prod_daily) > 0) and ("날짜_date" in shortage_prod_daily.columns) and ("규격대응률(%)" in shortage_prod_daily.columns):
+                daily_spec = shortage_prod_daily[["날짜_date", "규격대응률(%)"]].copy()
+                daily_spec["date"] = pd.to_datetime(daily_spec["날짜_date"], errors="coerce")
+                daily_spec = daily_spec.dropna(subset=["date"])
+                daily_spec["period"] = _period_start(daily_spec["date"], bucket)
+                agg_spec = daily_spec.groupby(["period"], dropna=False)["규격대응률(%)"].mean().reset_index()
+                agg_spec["value"] = pd.to_numeric(agg_spec["규격대응률(%)"], errors="coerce").clip(0, 100)
+                for _, r in agg_spec.iterrows():
+                    for f in factories:
+                        ts_rows.append({"기간": r["period"], "공장": f, "값": r["value"]})
+
+        ts_df = pd.DataFrame(ts_rows)
+        if len(ts_df) > 0:
+            ts_df["기간"] = pd.to_datetime(ts_df["기간"], errors="coerce")
+            full_grid = pd.MultiIndex.from_product([axis, factories], names=["기간", "공장"]).to_frame(index=False)
+            ts_df = full_grid.merge(ts_df, on=["기간", "공장"], how="left")
+
+            line_fig = px.line(
+                ts_df,
+                x="기간",
+                y="값",
+                color="공장",
+                title=f"공장별 {metric_option} 추이",
+                markers=False,
+            )
+            tickformat = "%m-%d" if bucket in {"D", "W"} else "%Y-%m"
+            line_fig.update_layout(
+                height=360,
+                margin=dict(l=0, r=0, t=60, b=0),
+                yaxis=dict(range=[0, 105], title=f"{metric_option} (%)"),
+                xaxis=dict(tickformat=tickformat),
+                legend_title_text="공장",
+            )
+            st.plotly_chart(line_fig, use_container_width=True)
 
         st.markdown(f"**선택 지표: {metric_option} (%)**")
         if not sku_coverage_available:
