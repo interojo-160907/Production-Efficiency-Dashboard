@@ -205,33 +205,71 @@ def render_kpi_split_card(
 
 
 @st.cache_data(show_spinner=False)
-def load_result_excel(result_path: Path, mtime_ns: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """결과 엑셀 파일 로드 + 전처리 (Streamlit 캐시 적용)
+def load_result_excels(result_paths: tuple[str, ...], mtime_nss: tuple[int, ...]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """결과 엑셀 파일(여러 개 가능) 로드 + 전처리 (Streamlit 캐시 적용)
 
-    - 위젯 변경 시 전체 스크립트가 rerun 되므로, 엑셀 로딩/전처리를 캐시해 속도를 개선합니다.
-    - mtime_ns는 파일 변경 시 캐시 무효화를 위해 사용됩니다.
+    - 월별로 파일이 분리되어 저장되는 경우(예: 유효생산량_결과_2026-05.xlsx)에도
+      전월/기간조회가 동작하도록 여러 결과 파일을 합쳐서 사용합니다.
+    - mtime_nss는 파일 변경 시 캐시 무효화를 위해 사용됩니다.
     """
-    _ = mtime_ns  # cache key only
-    sheets = pd.read_excel(result_path, sheet_name=["매칭결과", "일별요약", "공장_신규분류별"])
+    _ = mtime_nss  # cache key only
 
-    required = {"매칭결과", "일별요약", "공장_신규분류별"}
-    missing = required - set(sheets.keys())
-    if missing:
-        raise ValueError(f"결과 엑셀에 필요한 시트가 없습니다: {', '.join(missing)}")
+    required_sheets = ["매칭결과", "일별요약", "공장_신규분류별"]
+    matching_frames: list[pd.DataFrame] = []
+    daily_frames: list[pd.DataFrame] = []
+    factory_frames: list[pd.DataFrame] = []
 
-    matching_result = sheets["매칭결과"]
-    daily_summary = sheets["일별요약"]
-    factory_summary = sheets["공장_신규분류별"]
+    for path_str, mtime_ns in zip(result_paths, mtime_nss, strict=False):
+        path = Path(path_str)
+        sheets = pd.read_excel(path, sheet_name=required_sheets)
+        required = set(required_sheets)
+        missing = required - set(sheets.keys())
+        if missing:
+            raise ValueError(f"결과 엑셀에 필요한 시트가 없습니다({path.name}): {', '.join(sorted(missing))}")
 
-    matching_result["날짜"] = pd.to_datetime(matching_result["날짜"], errors="coerce")
-    matching_result["생산일자"] = pd.to_datetime(matching_result["생산일자"], errors="coerce")
-    daily_summary["날짜"] = pd.to_datetime(daily_summary["날짜"], errors="coerce")
-    factory_summary["생산일자"] = pd.to_datetime(factory_summary["생산일자"], errors="coerce")
+        mr = sheets["매칭결과"].copy()
+        ds = sheets["일별요약"].copy()
+        fs = sheets["공장_신규분류별"].copy()
 
-    matching_result["날짜_date"] = matching_result["날짜"].dt.date
-    matching_result["생산일자_date"] = matching_result["생산일자"].dt.date
-    daily_summary["날짜_date"] = daily_summary["날짜"].dt.date
-    factory_summary["생산일자_date"] = factory_summary["생산일자"].dt.date
+        mr["_source_mtime_ns"] = mtime_ns
+        ds["_source_mtime_ns"] = mtime_ns
+        fs["_source_mtime_ns"] = mtime_ns
+
+        matching_frames.append(mr)
+        daily_frames.append(ds)
+        factory_frames.append(fs)
+
+    matching_result = pd.concat(matching_frames, ignore_index=True) if matching_frames else pd.DataFrame()
+    daily_summary = pd.concat(daily_frames, ignore_index=True) if daily_frames else pd.DataFrame()
+    factory_summary = pd.concat(factory_frames, ignore_index=True) if factory_frames else pd.DataFrame()
+
+    if len(matching_result) > 0:
+        matching_result["날짜"] = pd.to_datetime(matching_result["날짜"], errors="coerce")
+        matching_result["생산일자"] = pd.to_datetime(matching_result["생산일자"], errors="coerce")
+        matching_result = matching_result.sort_values("_source_mtime_ns", kind="stable")
+        dedup_cols = [c for c in ["날짜", "생산일자", "공장", "신규분류요약", "제품코드"] if c in matching_result.columns]
+        if dedup_cols:
+            matching_result = matching_result.drop_duplicates(subset=dedup_cols, keep="last")
+        matching_result["날짜_date"] = matching_result["날짜"].dt.date
+        matching_result["생산일자_date"] = matching_result["생산일자"].dt.date
+        matching_result = matching_result.drop(columns=["_source_mtime_ns"], errors="ignore")
+
+    if len(daily_summary) > 0:
+        daily_summary["날짜"] = pd.to_datetime(daily_summary["날짜"], errors="coerce")
+        daily_summary = daily_summary.sort_values("_source_mtime_ns", kind="stable")
+        if "날짜" in daily_summary.columns:
+            daily_summary = daily_summary.drop_duplicates(subset=["날짜"], keep="last")
+        daily_summary["날짜_date"] = daily_summary["날짜"].dt.date
+        daily_summary = daily_summary.drop(columns=["_source_mtime_ns"], errors="ignore")
+
+    if len(factory_summary) > 0:
+        factory_summary["생산일자"] = pd.to_datetime(factory_summary["생산일자"], errors="coerce")
+        factory_summary = factory_summary.sort_values("_source_mtime_ns", kind="stable")
+        dedup_cols = [c for c in ["생산일자", "공장", "신규분류요약"] if c in factory_summary.columns]
+        if dedup_cols:
+            factory_summary = factory_summary.drop_duplicates(subset=dedup_cols, keep="last")
+        factory_summary["생산일자_date"] = factory_summary["생산일자"].dt.date
+        factory_summary = factory_summary.drop(columns=["_source_mtime_ns"], errors="ignore")
 
     return matching_result, daily_summary, factory_summary
 
@@ -249,11 +287,11 @@ if not result_candidates:
     st.info("먼저 `aps_yield_dashboard.py`를 실행해서 결과 파일을 생성하세요.")
     st.stop()
 
-# 최신 결과 파일 자동 선택 (파일 선택 UI 숨김)
-result_path = result_candidates[0]
-
 try:
-    matching_result, daily_summary, factory_summary = load_result_excel(result_path, result_path.stat().st_mtime_ns)
+    # 최신 파일이 월별로 분리되어 저장될 수 있어, 후보 파일들을 합쳐서 사용
+    result_paths = tuple(str(p) for p in result_candidates)
+    mtime_nss = tuple(int(p.stat().st_mtime_ns) for p in result_candidates)
+    matching_result, daily_summary, factory_summary = load_result_excels(result_paths, mtime_nss)
 
     # 금일 데이터 제외 (아직 생산 중이므로) - KST 기준
     now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
@@ -288,8 +326,12 @@ try:
         start_date = prev_month_start
         end_date = last_day_prev
     else:  # 기간조회
-        min_date = daily_summary[daily_summary["날짜_date"] != today]["날짜"].min()
-        max_date = daily_summary[daily_summary["날짜_date"] != today]["날짜"].max()
+        min_date = daily_summary[daily_summary["날짜_date"] != today]["날짜_date"].min()
+        max_date = daily_summary[daily_summary["날짜_date"] != today]["날짜_date"].max()
+        if pd.isna(min_date) or pd.isna(max_date):
+            st.warning("선택 가능한 날짜 범위를 계산할 수 없습니다. (데이터 없음)")
+            min_date = today
+            max_date = today
 
         col_filter1, col_space, col_filter2 = st.columns([1.5, 0.2, 1.5])
 
@@ -298,6 +340,10 @@ try:
 
         with col_filter2:
             end_date = st.date_input("종료 날짜", value=max_date, min_value=min_date, max_value=max_date)
+
+    if start_date > end_date:
+        st.warning("시작 날짜가 종료 날짜보다 커서 자동으로 교체했습니다.")
+        start_date, end_date = end_date, start_date
 
     st.markdown("<div style='height:30px'></div>", unsafe_allow_html=True)
 
