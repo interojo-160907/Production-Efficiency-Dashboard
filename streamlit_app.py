@@ -850,6 +850,8 @@ try:
             ts_df["기간"] = pd.to_datetime(ts_df["기간"], errors="coerce")
             full_grid = pd.MultiIndex.from_product([axis, factories], names=["기간", "공장"]).to_frame(index=False)
             ts_df = full_grid.merge(ts_df, on=["기간", "공장"], how="left")
+            label_map = {pd.Timestamp(v): t for v, t in zip(tickvals, ticktext, strict=False)}
+            ts_df["x_label"] = ts_df["기간"].map(label_map)
 
             line_fig = px.line(
                 ts_df,
@@ -858,11 +860,16 @@ try:
                 color="공장",
                 title=f"공장별 {metric_option} 추이",
                 markers=False,
+                custom_data=["x_label"],
+            )
+            line_fig.update_traces(
+                line=dict(width=3.5),
+                hovertemplate="공장=%{legendgroup}<br>기간=%{customdata[0]}<br>값=%{y:.1f}%<extra></extra>",
             )
             line_fig.update_layout(
                 height=360,
                 margin=dict(l=0, r=0, t=60, b=0),
-                yaxis=dict(range=[0, 105], title=f"{metric_option} (%)"),
+                yaxis=dict(range=[0, 105], title=f"{metric_option} (%)", tickformat=".1f"),
                 xaxis=dict(
                     tickmode="array",
                     tickvals=tickvals,
