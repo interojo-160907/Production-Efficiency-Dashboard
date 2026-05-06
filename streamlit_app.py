@@ -255,7 +255,10 @@ def render_kpi_split_card(
 
 
 @st.cache_data(show_spinner=False)
-def load_result_excels(result_paths: tuple[str, ...], mtime_nss: tuple[int, ...]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_result_excels(
+    result_paths: tuple[str, ...],
+    mtime_nss: tuple[int, ...],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """결과 엑셀 파일(여러 개 가능) 로드 + 전처리 (Streamlit 캐시 적용)
 
     - 월별로 파일이 분리되어 저장되는 경우(예: 유효생산량_결과_2026-05.xlsx)에도
@@ -323,7 +326,79 @@ def load_result_excels(result_paths: tuple[str, ...], mtime_nss: tuple[int, ...]
         factory_summary["생산일자_date"] = factory_summary["생산일자"].dt.date
         factory_summary = factory_summary.drop(columns=["_source_mtime_ns"], errors="ignore")
 
-    return matching_result, daily_summary, factory_summary
+    # SKU 기반 일자 규격 대응률(전사/공장별) 프리컴퓨트 (대용량 groupby는 1회만 수행)
+    sku_daily_all = pd.DataFrame()
+    sku_daily_factory = pd.DataFrame()
+    required_cols = {"날짜_date", "제품코드", "양품수량", "부족수량", "유효생산량"}
+    if len(matching_result) > 0 and required_cols.issubset(set(matching_result.columns)):
+        base = matching_result[matching_result["제품코드"].notna()].copy()
+        for col in ["양품수량", "부족수량", "유효생산량"]:
+            base[col] = pd.to_numeric(base[col], errors="coerce").fillna(0)
+        base["_need_qty"] = (base["유효생산량"] + base["부족수량"]).fillna(0)
+
+        by_day_sku = base.groupby(["날짜_date", "제품코드"], dropna=False).agg(
+            prod_qty=("양품수량", "sum"),
+            need_qty=("_need_qty", "sum"),
+        ).reset_index()
+        by_day_sku["produced_flag"] = by_day_sku["prod_qty"] > 0
+        by_day_sku["need_flag"] = by_day_sku["need_qty"] > 0
+
+        produced_skus = (
+            by_day_sku[by_day_sku["produced_flag"]]
+            .groupby("날짜_date", dropna=False)["제품코드"]
+            .nunique()
+            .rename("생산SKU수")
+        )
+        needed_skus = (
+            by_day_sku[by_day_sku["produced_flag"] & by_day_sku["need_flag"]]
+            .groupby("날짜_date", dropna=False)["제품코드"]
+            .nunique()
+            .rename("필요대응SKU수")
+        )
+        sku_daily_all = pd.concat([produced_skus, needed_skus], axis=1).fillna(0).reset_index()
+        sku_daily_all["규격대응률(%)"] = np.where(
+            sku_daily_all["생산SKU수"] > 0,
+            sku_daily_all["필요대응SKU수"] / sku_daily_all["생산SKU수"] * 100,
+            0,
+        )
+        sku_daily_all["규격대응률(%)"] = sku_daily_all["규격대응률(%)"].clip(0, 100)
+        sku_daily_all = sku_daily_all.sort_values("날짜_date").reset_index(drop=True)
+
+        if "공장" in matching_result.columns:
+            base_f = matching_result[(matching_result["공장"].notna()) & (matching_result["제품코드"].notna())].copy()
+            for col in ["양품수량", "부족수량", "유효생산량"]:
+                base_f[col] = pd.to_numeric(base_f[col], errors="coerce").fillna(0)
+            base_f["_need_qty"] = (base_f["유효생산량"] + base_f["부족수량"]).fillna(0)
+
+            by_day_factory_sku = base_f.groupby(["날짜_date", "공장", "제품코드"], dropna=False).agg(
+                prod_qty=("양품수량", "sum"),
+                need_qty=("_need_qty", "sum"),
+            ).reset_index()
+            by_day_factory_sku["produced_flag"] = by_day_factory_sku["prod_qty"] > 0
+            by_day_factory_sku["need_flag"] = by_day_factory_sku["need_qty"] > 0
+
+            produced_f = (
+                by_day_factory_sku[by_day_factory_sku["produced_flag"]]
+                .groupby(["날짜_date", "공장"], dropna=False)["제품코드"]
+                .nunique()
+                .rename("생산SKU수")
+            )
+            needed_f = (
+                by_day_factory_sku[by_day_factory_sku["produced_flag"] & by_day_factory_sku["need_flag"]]
+                .groupby(["날짜_date", "공장"], dropna=False)["제품코드"]
+                .nunique()
+                .rename("필요대응SKU수")
+            )
+            sku_daily_factory = pd.concat([produced_f, needed_f], axis=1).fillna(0).reset_index()
+            sku_daily_factory["규격대응률(%)"] = np.where(
+                sku_daily_factory["생산SKU수"] > 0,
+                sku_daily_factory["필요대응SKU수"] / sku_daily_factory["생산SKU수"] * 100,
+                0,
+            )
+            sku_daily_factory["규격대응률(%)"] = sku_daily_factory["규격대응률(%)"].clip(0, 100)
+            sku_daily_factory = sku_daily_factory.sort_values(["날짜_date", "공장"]).reset_index(drop=True)
+
+    return matching_result, daily_summary, factory_summary, sku_daily_all, sku_daily_factory
 
 
 # 결과 파일 선택(월별 분리 저장 지원)
@@ -364,7 +439,7 @@ try:
     # 최신 파일이 월별로 분리되어 저장될 수 있어, 후보 파일들을 합쳐서 사용
     result_paths = tuple(str(p) for p in result_candidates)
     mtime_nss = tuple(int(p.stat().st_mtime_ns) for p in result_candidates)
-    matching_result, daily_summary, factory_summary = load_result_excels(result_paths, mtime_nss)
+    matching_result, daily_summary, factory_summary, sku_daily_all, sku_daily_factory = load_result_excels(result_paths, mtime_nss)
 
     # 금일 데이터 제외 (아직 생산 중이므로) - KST 기준
     now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
@@ -474,51 +549,15 @@ try:
     # - 공장별 규격 대응률도 동일 기준으로 계산하려면 `매칭결과` 시트에 `공장` 컬럼이 필요합니다.
     shortage_prod_daily = None
     shortage_prod_rate = None
-    if matching_result is not None and len(matching_result) > 0 and {"날짜_date", "제품코드", "양품수량", "부족수량", "유효생산량"}.issubset(set(matching_result.columns)):
-        match_filtered = matching_result[
-            (matching_result["날짜_date"] >= start_date) &
-            (matching_result["날짜_date"] <= end_date) &
-            (matching_result["날짜_date"] != today) &
-            (matching_result["제품코드"].notna())
+    if sku_daily_all is not None and len(sku_daily_all) > 0 and {"날짜_date", "생산SKU수", "필요대응SKU수", "규격대응률(%)"}.issubset(set(sku_daily_all.columns)):
+        shortage_prod_daily = sku_daily_all[
+            (sku_daily_all["날짜_date"] >= start_date) &
+            (sku_daily_all["날짜_date"] <= end_date) &
+            (sku_daily_all["날짜_date"] != today)
         ].copy()
-        if len(match_filtered) > 0:
-            for col in ["양품수량", "부족수량", "유효생산량"]:
-                match_filtered[col] = pd.to_numeric(match_filtered[col], errors="coerce").fillna(0)
-            match_filtered["_need_qty"] = (match_filtered["유효생산량"] + match_filtered["부족수량"]).fillna(0)
-
-            by_day_sku = match_filtered.groupby(["날짜_date", "제품코드"], dropna=False).agg(
-                prod_qty=("양품수량", "sum"),
-                need_qty=("_need_qty", "sum"),
-            ).reset_index()
-            by_day_sku["produced_flag"] = by_day_sku["prod_qty"] > 0
-            by_day_sku["need_flag"] = by_day_sku["need_qty"] > 0
-
-            produced_skus = (
-                by_day_sku[by_day_sku["produced_flag"]]
-                .groupby("날짜_date", dropna=False)["제품코드"]
-                .nunique()
-                .rename("생산SKU수")
-            )
-            needed_skus = (
-                by_day_sku[by_day_sku["produced_flag"] & by_day_sku["need_flag"]]
-                .groupby("날짜_date", dropna=False)["제품코드"]
-                .nunique()
-                .rename("필요대응SKU수")
-            )
-            shortage_prod_daily = (
-                pd.concat([produced_skus, needed_skus], axis=1)
-                .fillna(0)
-                .reset_index()
-            )
-            shortage_prod_daily["규격대응률(%)"] = np.where(
-                shortage_prod_daily["생산SKU수"] > 0,
-                shortage_prod_daily["필요대응SKU수"] / shortage_prod_daily["생산SKU수"] * 100,
-                0,
-            )
-            shortage_prod_daily["규격대응률(%)"] = shortage_prod_daily["규격대응률(%)"].clip(0, 100)
-            shortage_prod_daily = shortage_prod_daily.sort_values("날짜_date").reset_index(drop=True)
-            produced_skus_total = float(shortage_prod_daily["생산SKU수"].sum())
-            need_responded_skus_total = float(shortage_prod_daily["필요대응SKU수"].sum())
+        if len(shortage_prod_daily) > 0:
+            produced_skus_total = float(pd.to_numeric(shortage_prod_daily["생산SKU수"], errors="coerce").fillna(0).sum())
+            need_responded_skus_total = float(pd.to_numeric(shortage_prod_daily["필요대응SKU수"], errors="coerce").fillna(0).sum())
             shortage_prod_rate = (need_responded_skus_total / produced_skus_total * 100) if produced_skus_total > 0 else None
 
     colA, col3, col4, col5 = st.columns([2.6, 1.1, 1.1, 1.1])
@@ -596,45 +635,18 @@ try:
         # - 정의: (Σ 일자별 필요대응SKU수) / (Σ 일자별 생산SKU수)
         sku_coverage_available = False
         sku_coverage_unavailable_reason: str | None = None
-        required_cols = {"공장", "제품코드", "양품수량", "부족수량", "유효생산량", "날짜_date"}
-        if matching_result is None or not required_cols.issubset(set(matching_result.columns)):
+        required_cols = {"날짜_date", "공장", "생산SKU수", "필요대응SKU수"}
+        if sku_daily_factory is None or len(sku_daily_factory) == 0 or not required_cols.issubset(set(sku_daily_factory.columns)):
             sku_coverage_unavailable_reason = "필수 컬럼 누락(`공장/제품코드/수량/날짜`)"
         else:
-            base_mf = matching_result[
-                (matching_result["날짜_date"] >= start_date) &
-                (matching_result["날짜_date"] <= end_date) &
-                (matching_result["날짜_date"] != today)
+            day_counts = sku_daily_factory[
+                (sku_daily_factory["날짜_date"] >= start_date) &
+                (sku_daily_factory["날짜_date"] <= end_date) &
+                (sku_daily_factory["날짜_date"] != today)
             ].copy()
-            mf = base_mf[(base_mf["공장"].notna()) & (base_mf["제품코드"].notna())].copy()
-            if len(mf) == 0:
-                if len(base_mf) == 0:
-                    sku_coverage_unavailable_reason = "선택 기간에 매칭결과 데이터 없음"
-                else:
-                    sku_coverage_unavailable_reason = "선택 기간 데이터에 `공장` 값이 비어있음(월별 결과 파일 스키마/생성 방식 확인 필요)"
+            if len(day_counts) == 0:
+                sku_coverage_unavailable_reason = "선택 기간에 매칭결과 데이터 없음"
             else:
-                for col in ["양품수량", "부족수량", "유효생산량"]:
-                    mf[col] = pd.to_numeric(mf[col], errors="coerce").fillna(0)
-                mf["_need_qty"] = (mf["유효생산량"] + mf["부족수량"]).fillna(0)
-                by_day_factory_sku = mf.groupby(["날짜_date", "공장", "제품코드"], dropna=False).agg(
-                    prod_qty=("양품수량", "sum"),
-                    need_qty=("_need_qty", "sum"),
-                ).reset_index()
-                by_day_factory_sku["produced_flag"] = by_day_factory_sku["prod_qty"] > 0
-                by_day_factory_sku["need_flag"] = by_day_factory_sku["need_qty"] > 0
-
-                produced = (
-                    by_day_factory_sku[by_day_factory_sku["produced_flag"]]
-                    .groupby(["날짜_date", "공장"], dropna=False)["제품코드"]
-                    .nunique()
-                    .rename("생산SKU수")
-                )
-                needed = (
-                    by_day_factory_sku[by_day_factory_sku["produced_flag"] & by_day_factory_sku["need_flag"]]
-                    .groupby(["날짜_date", "공장"], dropna=False)["제품코드"]
-                    .nunique()
-                    .rename("필요대응SKU수")
-                )
-                day_counts = pd.concat([produced, needed], axis=1).fillna(0).reset_index()
                 sku_counts = day_counts.groupby("공장", dropna=False)[["생산SKU수", "필요대응SKU수"]].sum().reset_index()
                 sku_counts["규격대응률(%)"] = np.where(
                     sku_counts["생산SKU수"] > 0,
@@ -788,38 +800,14 @@ try:
                 ts_rows.append({"기간": r["period"], "공장": r["공장"], "값": r["value"]})
         else:
             spec_done = False
-            required_cols_ts = {"공장", "제품코드", "양품수량", "부족수량", "유효생산량", "날짜_date"}
-            if sku_coverage_available and matching_result is not None and required_cols_ts.issubset(set(matching_result.columns)):
-                base_mf_ts = matching_result[
-                    (matching_result["날짜_date"] >= start_date) &
-                    (matching_result["날짜_date"] <= end_date) &
-                    (matching_result["날짜_date"] != today)
+            required_cols_ts = {"날짜_date", "공장", "생산SKU수", "필요대응SKU수"}
+            if sku_daily_factory is not None and len(sku_daily_factory) > 0 and required_cols_ts.issubset(set(sku_daily_factory.columns)):
+                day_counts_ts = sku_daily_factory[
+                    (sku_daily_factory["날짜_date"] >= start_date) &
+                    (sku_daily_factory["날짜_date"] <= end_date) &
+                    (sku_daily_factory["날짜_date"] != today)
                 ].copy()
-                mf_ts = base_mf_ts[(base_mf_ts["공장"].notna()) & (base_mf_ts["제품코드"].notna())].copy()
-                if len(mf_ts) > 0:
-                    for col in ["양품수량", "부족수량", "유효생산량"]:
-                        mf_ts[col] = pd.to_numeric(mf_ts[col], errors="coerce").fillna(0)
-                    mf_ts["_need_qty"] = (mf_ts["유효생산량"] + mf_ts["부족수량"]).fillna(0)
-                    by_day_factory_sku_ts = mf_ts.groupby(["날짜_date", "공장", "제품코드"], dropna=False).agg(
-                        prod_qty=("양품수량", "sum"),
-                        need_qty=("_need_qty", "sum"),
-                    ).reset_index()
-                    by_day_factory_sku_ts["produced_flag"] = by_day_factory_sku_ts["prod_qty"] > 0
-                    by_day_factory_sku_ts["need_flag"] = by_day_factory_sku_ts["need_qty"] > 0
-
-                    produced_ts = (
-                        by_day_factory_sku_ts[by_day_factory_sku_ts["produced_flag"]]
-                        .groupby(["날짜_date", "공장"], dropna=False)["제품코드"]
-                        .nunique()
-                        .rename("생산SKU수")
-                    )
-                    needed_ts = (
-                        by_day_factory_sku_ts[by_day_factory_sku_ts["produced_flag"] & by_day_factory_sku_ts["need_flag"]]
-                        .groupby(["날짜_date", "공장"], dropna=False)["제품코드"]
-                        .nunique()
-                        .rename("필요대응SKU수")
-                    )
-                    day_counts_ts = pd.concat([produced_ts, needed_ts], axis=1).fillna(0).reset_index()
+                if len(day_counts_ts) > 0:
                     day_counts_ts["date"] = pd.to_datetime(day_counts_ts["날짜_date"], errors="coerce")
                     day_counts_ts = day_counts_ts.dropna(subset=["date"])
                     day_counts_ts["period"] = _period_start(day_counts_ts["date"], bucket)
@@ -834,16 +822,26 @@ try:
                         ts_rows.append({"기간": r["period"], "공장": r["공장"], "값": r["value"]})
                     spec_done = True
 
-            if (not spec_done) and (shortage_prod_daily is not None) and (len(shortage_prod_daily) > 0) and ("날짜_date" in shortage_prod_daily.columns) and ("규격대응률(%)" in shortage_prod_daily.columns):
-                daily_spec = shortage_prod_daily[["날짜_date", "규격대응률(%)"]].copy()
-                daily_spec["date"] = pd.to_datetime(daily_spec["날짜_date"], errors="coerce")
-                daily_spec = daily_spec.dropna(subset=["date"])
-                daily_spec["period"] = _period_start(daily_spec["date"], bucket)
-                agg_spec = daily_spec.groupby(["period"], dropna=False)["규격대응률(%)"].mean().reset_index()
-                agg_spec["value"] = pd.to_numeric(agg_spec["규격대응률(%)"], errors="coerce").clip(0, 100)
-                for _, r in agg_spec.iterrows():
-                    for f in factories:
-                        ts_rows.append({"기간": r["period"], "공장": f, "값": r["value"]})
+            if (not spec_done) and (sku_daily_all is not None) and (len(sku_daily_all) > 0) and {"날짜_date", "생산SKU수", "필요대응SKU수"}.issubset(set(sku_daily_all.columns)):
+                daily_spec = sku_daily_all[
+                    (sku_daily_all["날짜_date"] >= start_date) &
+                    (sku_daily_all["날짜_date"] <= end_date) &
+                    (sku_daily_all["날짜_date"] != today)
+                ].copy()
+                if len(daily_spec) > 0:
+                    daily_spec["date"] = pd.to_datetime(daily_spec["날짜_date"], errors="coerce")
+                    daily_spec = daily_spec.dropna(subset=["date"])
+                    daily_spec["period"] = _period_start(daily_spec["date"], bucket)
+                    agg_spec = daily_spec.groupby(["period"], dropna=False)[["생산SKU수", "필요대응SKU수"]].sum().reset_index()
+                    agg_spec["value"] = np.where(
+                        agg_spec["생산SKU수"] > 0,
+                        agg_spec["필요대응SKU수"] / agg_spec["생산SKU수"] * 100,
+                        np.nan,
+                    )
+                    agg_spec["value"] = pd.to_numeric(agg_spec["value"], errors="coerce").clip(0, 100)
+                    for _, r in agg_spec.iterrows():
+                        for f in factories:
+                            ts_rows.append({"기간": r["period"], "공장": f, "값": r["value"]})
 
         ts_df = pd.DataFrame(ts_rows)
         if len(ts_df) > 0:
@@ -1163,45 +1161,13 @@ try:
             # 관별(공장별) 일자 규격 대응률(SKU 기준)
             factory_daily_spec = None
             factory_daily_spec_by_day = None
-            if matching_result is not None and {"공장", "제품코드", "양품수량", "부족수량", "유효생산량", "날짜_date"}.issubset(set(matching_result.columns)):
-                mf = matching_result[
-                    (matching_result["날짜_date"] >= start_date) &
-                    (matching_result["날짜_date"] <= end_date) &
-                    (matching_result["날짜_date"] != today) &
-                    (matching_result["공장"].notna()) &
-                    (matching_result["제품코드"].notna())
-                ].copy()
-                if len(mf) > 0:
-                    for col in ["양품수량", "부족수량", "유효생산량"]:
-                        mf[col] = pd.to_numeric(mf[col], errors="coerce").fillna(0)
-                    mf["_need_qty"] = (mf["유효생산량"] + mf["부족수량"]).fillna(0)
-                    by_day_factory_sku = mf.groupby(["날짜_date", "공장", "제품코드"], dropna=False).agg(
-                        prod_qty=("양품수량", "sum"),
-                        need_qty=("_need_qty", "sum"),
-                    ).reset_index()
-                    by_day_factory_sku["produced_flag"] = by_day_factory_sku["prod_qty"] > 0
-                    by_day_factory_sku["need_flag"] = by_day_factory_sku["need_qty"] > 0
-
-                    produced = (
-                        by_day_factory_sku[by_day_factory_sku["produced_flag"]]
-                        .groupby(["날짜_date", "공장"], dropna=False)["제품코드"]
-                        .nunique()
-                        .rename("생산SKU수")
-                    )
-                    needed = (
-                        by_day_factory_sku[by_day_factory_sku["produced_flag"] & by_day_factory_sku["need_flag"]]
-                        .groupby(["날짜_date", "공장"], dropna=False)["제품코드"]
-                        .nunique()
-                        .rename("필요대응SKU수")
-                    )
-                    factory_daily_spec = pd.concat([produced, needed], axis=1).fillna(0).reset_index()
-                    factory_daily_spec["규격 대응률(%)"] = np.where(
-                        factory_daily_spec["생산SKU수"] > 0,
-                        factory_daily_spec["필요대응SKU수"] / factory_daily_spec["생산SKU수"] * 100,
-                        0,
-                    )
-                    factory_daily_spec["규격 대응률(%)"] = factory_daily_spec["규격 대응률(%)"].clip(0, 100)
-                    factory_daily_spec = factory_daily_spec[["날짜_date", "공장", "규격 대응률(%)"]]
+            if sku_daily_factory is not None and len(sku_daily_factory) > 0 and {"날짜_date", "공장", "규격대응률(%)"}.issubset(set(sku_daily_factory.columns)):
+                factory_daily_spec = sku_daily_factory[
+                    (sku_daily_factory["날짜_date"] >= start_date) &
+                    (sku_daily_factory["날짜_date"] <= end_date) &
+                    (sku_daily_factory["날짜_date"] != today)
+                ][["날짜_date", "공장", "규격대응률(%)"]].copy()
+                factory_daily_spec.rename(columns={"규격대응률(%)": "규격 대응률(%)"}, inplace=True)
             elif shortage_prod_daily is not None and len(shortage_prod_daily) > 0:
                 factory_daily_spec_by_day = shortage_prod_daily[["날짜_date", "규격대응률(%)"]].copy()
                 factory_daily_spec_by_day.rename(columns={"날짜_date": "날짜", "규격대응률(%)": "규격 대응률(%)"}, inplace=True)
