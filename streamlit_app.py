@@ -256,6 +256,7 @@ def load_result_excels(result_paths: tuple[str, ...], mtime_nss: tuple[int, ...]
 
     if len(daily_summary) > 0:
         daily_summary["날짜"] = pd.to_datetime(daily_summary["날짜"], errors="coerce")
+        daily_summary = daily_summary[daily_summary["날짜"].notna()].copy()
         daily_summary = daily_summary.sort_values("_source_mtime_ns", kind="stable")
         if "날짜" in daily_summary.columns:
             daily_summary = daily_summary.drop_duplicates(subset=["날짜"], keep="last")
@@ -264,6 +265,7 @@ def load_result_excels(result_paths: tuple[str, ...], mtime_nss: tuple[int, ...]
 
     if len(factory_summary) > 0:
         factory_summary["생산일자"] = pd.to_datetime(factory_summary["생산일자"], errors="coerce")
+        factory_summary = factory_summary[factory_summary["생산일자"].notna()].copy()
         factory_summary = factory_summary.sort_values("_source_mtime_ns", kind="stable")
         dedup_cols = [c for c in ["생산일자", "공장", "신규분류요약"] if c in factory_summary.columns]
         if dedup_cols:
@@ -305,7 +307,7 @@ if not result_candidates:
         "⚠️ 결과 파일을 찾을 수 없습니다. 검색 경로: "
         + ", ".join(str(d) for d in search_dirs)
     )
-    st.info("먼저 `aps_yield_dashboard.py`를 실행해서 결과 파일을 생성하세요.")
+    st.info("전처리 완료된 결과 파일(`유효생산량_결과*.xlsx`)을 repo 루트 또는 `outputs/`에 넣어주세요.")
     st.stop()
 
 try:
@@ -318,6 +320,24 @@ try:
     now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
     today = now_kst.date()
     st.caption(f"기준 시각(KST): {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # 필수 데이터 검증/정규화
+    if daily_summary is None or len(daily_summary) == 0 or "날짜_date" not in daily_summary.columns:
+        st.error("⚠️ `일별요약` 시트에 날짜 데이터가 없어서 대시보드를 표시할 수 없습니다. (컬럼: `날짜`)")
+        st.info("`유효생산량_결과*.xlsx`를 최신 버전으로 다시 생성한 뒤, repo 루트 또는 `outputs/`에 넣어주세요.")
+        st.stop()
+
+    for col in ["총실적", "총부족수량", "유효생산량", "과생산량", "불필요생산량"]:
+        if col in daily_summary.columns:
+            daily_summary[col] = pd.to_numeric(daily_summary[col], errors="coerce").fillna(0)
+
+    factory_has_dates = factory_summary is not None and len(factory_summary) > 0 and "생산일자_date" in factory_summary.columns
+    if factory_has_dates:
+        for col in ["총실적", "총부족수량", "유효생산량", "과생산량", "불필요생산량"]:
+            if col in factory_summary.columns:
+                factory_summary[col] = pd.to_numeric(factory_summary[col], errors="coerce").fillna(0)
+    else:
+        factory_summary = pd.DataFrame()
 
     # 제목
     st.markdown(f"<h1 style='text-align:center; color:#1f3a93; margin:0;'>🏭 {DASHBOARD_TITLE}</h1>", unsafe_allow_html=True)
@@ -375,11 +395,14 @@ try:
         (daily_summary["날짜_date"] != today)
     ]
 
-    factory_summary_filtered = factory_summary[
-        (factory_summary["생산일자_date"] >= start_date) &
-        (factory_summary["생산일자_date"] <= end_date) &
-        (factory_summary["생산일자_date"] != today)
-    ]
+    if factory_has_dates and len(factory_summary) > 0:
+        factory_summary_filtered = factory_summary[
+            (factory_summary["생산일자_date"] >= start_date) &
+            (factory_summary["생산일자_date"] <= end_date) &
+            (factory_summary["생산일자_date"] != today)
+        ]
+    else:
+        factory_summary_filtered = pd.DataFrame()
 
     # 메트릭 계산
     total_prod = int(daily_summary_filtered["총실적"].sum()) if len(daily_summary_filtered) > 0 else 0
@@ -518,15 +541,23 @@ try:
         # 공장별 규격 대응률(SKU 기준): 일자별 생산 SKU 중 필요 SKU 비중의 기간 합산
         # - 정의: (Σ 일자별 필요대응SKU수) / (Σ 일자별 생산SKU수)
         sku_coverage_available = False
-        if matching_result is not None and {"공장", "제품코드", "양품수량", "부족수량", "유효생산량", "날짜_date"}.issubset(set(matching_result.columns)):
-            mf = matching_result[
+        sku_coverage_unavailable_reason: str | None = None
+        required_cols = {"공장", "제품코드", "양품수량", "부족수량", "유효생산량", "날짜_date"}
+        if matching_result is None or not required_cols.issubset(set(matching_result.columns)):
+            sku_coverage_unavailable_reason = "필수 컬럼 누락(`공장/제품코드/수량/날짜`)"
+        else:
+            base_mf = matching_result[
                 (matching_result["날짜_date"] >= start_date) &
                 (matching_result["날짜_date"] <= end_date) &
-                (matching_result["날짜_date"] != today) &
-                (matching_result["공장"].notna()) &
-                (matching_result["제품코드"].notna())
+                (matching_result["날짜_date"] != today)
             ].copy()
-            if len(mf) > 0:
+            mf = base_mf[(base_mf["공장"].notna()) & (base_mf["제품코드"].notna())].copy()
+            if len(mf) == 0:
+                if len(base_mf) == 0:
+                    sku_coverage_unavailable_reason = "선택 기간에 매칭결과 데이터 없음"
+                else:
+                    sku_coverage_unavailable_reason = "선택 기간 데이터에 `공장` 값이 비어있음(월별 결과 파일 스키마/생성 방식 확인 필요)"
+            else:
                 for col in ["양품수량", "부족수량", "유효생산량"]:
                     mf[col] = pd.to_numeric(mf[col], errors="coerce").fillna(0)
                 mf["_need_qty"] = (mf["유효생산량"] + mf["부족수량"]).fillna(0)
@@ -608,7 +639,8 @@ try:
         metric_col, pcs_col = metric_map[metric_option]
         factory_data["선택지표"] = factory_data[metric_col].replace([np.inf, -np.inf], 0).fillna(0)
         if metric_option == "규격 대응률" and not sku_coverage_available:
-            st.warning("공장별 `규격 대응률(SKU 기준)` 계산 불가: `매칭결과` 시트에 `공장` 컬럼이 없습니다. (전사 규격 대응률을 동일 적용해 표시)")
+            reason = sku_coverage_unavailable_reason or "원인 미상"
+            st.warning(f"공장별 `규격 대응률(SKU 기준)` 계산 불가: {reason}. (전사 규격 대응률을 동일 적용해 표시)")
 
         hover_data = {
             "총실적": ":,",
@@ -996,7 +1028,10 @@ try:
                     how="left",
                 )
             elif factory_daily_spec_by_day is not None and len(factory_daily_spec_by_day) > 0:
-                st.warning("관별(공장별) `규격 대응률(SKU 기준)` 계산 불가: `매칭결과` 시트에 `공장` 컬럼이 없습니다. (전사 일자 규격 대응률을 동일 적용해 표시)")
+                st.warning(
+                    "관별(공장별) `규격 대응률(SKU 기준)` 계산 불가: 선택 기간 데이터에 `공장` 값이 비어있거나 SKU 집계에 필요한 컬럼이 누락되었습니다. "
+                    "(전사 일자 규격 대응률을 동일 적용해 표시)"
+                )
                 factory_daily_display = factory_daily_display.merge(
                     factory_daily_spec_by_day,
                     on=["날짜"],
