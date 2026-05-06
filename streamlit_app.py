@@ -277,13 +277,34 @@ def load_result_excels(result_paths: tuple[str, ...], mtime_nss: tuple[int, ...]
 # 결과 파일 선택(월별 분리 저장 지원)
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 base_dir = Path(BASE_PATH)
+
+# 결과 파일이 repo 루트뿐 아니라 `outputs/` 아래에 저장되는 경우도 있어 함께 검색합니다.
+search_dirs = [base_dir, base_dir / "outputs", base_dir / "outputs" / "archive"]
+_cands: list[Path] = []
+for d in search_dirs:
+    if not d.exists():
+        continue
+    _cands.extend([p for p in d.glob("유효생산량_결과*.xlsx") if not p.name.startswith("~$")])
+
+_seen: set[str] = set()
+result_candidates: list[Path] = []
+for p in _cands:
+    rp = str(p.resolve())
+    if rp in _seen:
+        continue
+    _seen.add(rp)
+    result_candidates.append(p)
+
 result_candidates = sorted(
-    [p for p in base_dir.glob("유효생산량_결과*.xlsx") if not p.name.startswith("~$")],
+    result_candidates,
     key=lambda p: p.stat().st_mtime_ns if p.exists() else 0,
     reverse=True,
 )
 if not result_candidates:
-    st.error(f"⚠️ 결과 파일을 찾을 수 없습니다: {base_dir}")
+    st.error(
+        "⚠️ 결과 파일을 찾을 수 없습니다. 검색 경로: "
+        + ", ".join(str(d) for d in search_dirs)
+    )
     st.info("먼저 `aps_yield_dashboard.py`를 실행해서 결과 파일을 생성하세요.")
     st.stop()
 
