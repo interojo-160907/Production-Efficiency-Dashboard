@@ -345,7 +345,7 @@ try:
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
     # 기간 필터
-    filter_option = st.radio("조회 기간", ["당월", "전월", "기간조회"], horizontal=True, label_visibility="collapsed")
+    filter_option = st.radio("조회 기간", ["전체", "당월", "전월", "기간조회"], horizontal=True, label_visibility="collapsed")
 
     # 날짜 범위 계산
     current_month_start = datetime(today.year, today.month, 1).date()
@@ -359,16 +359,28 @@ try:
     last_day_prev = first_day_current - pd.Timedelta(days=1)
     prev_month_start = datetime(last_day_prev.year, last_day_prev.month, 1).date()
 
+    # 전체 기간(데이터 기준) 계산
+    full_min_date = daily_summary[daily_summary["날짜_date"] != today]["날짜_date"].min()
+    full_max_date = daily_summary[daily_summary["날짜_date"] != today]["날짜_date"].max()
+
     # 날짜 범위 결정
-    if filter_option == "당월":
+    if filter_option == "전체":
+        if pd.isna(full_min_date) or pd.isna(full_max_date):
+            st.warning("선택 가능한 날짜 범위를 계산할 수 없습니다. (데이터 없음)")
+            start_date = today
+            end_date = today
+        else:
+            start_date = full_min_date
+            end_date = full_max_date
+    elif filter_option == "당월":
         start_date = current_month_start
         end_date = current_month_end
     elif filter_option == "전월":
         start_date = prev_month_start
         end_date = last_day_prev
     else:  # 기간조회
-        min_date = daily_summary[daily_summary["날짜_date"] != today]["날짜_date"].min()
-        max_date = daily_summary[daily_summary["날짜_date"] != today]["날짜_date"].max()
+        min_date = full_min_date
+        max_date = full_max_date
         if pd.isna(min_date) or pd.isna(max_date):
             st.warning("선택 가능한 날짜 범위를 계산할 수 없습니다. (데이터 없음)")
             min_date = today
@@ -377,7 +389,7 @@ try:
         col_filter1, col_space, col_filter2 = st.columns([1.5, 0.2, 1.5])
 
         with col_filter1:
-            start_date = st.date_input("시작 날짜", value=max_date, min_value=min_date, max_value=max_date)
+            start_date = st.date_input("시작 날짜", value=min_date, min_value=min_date, max_value=max_date)
 
         with col_filter2:
             end_date = st.date_input("종료 날짜", value=max_date, min_value=min_date, max_value=max_date)
