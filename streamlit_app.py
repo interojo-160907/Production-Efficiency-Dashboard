@@ -154,9 +154,11 @@ def _build_excel_report_bytes(
         # Hidden data sheet for chart source ranges (Excel charts must reference cells on a worksheet).
         # Keep it hidden so the report sheets remain clean.
         # Create DATA sheet last (so the workbook opens on the first report sheet).
+        # We still need stable cell ranges for charts, so we pre-allocate row blocks
+        # and write the actual DATA sheet at the end.
         data_sheet_name = "DATA"
-        data_ws = None
         data_next_row = 0
+        pending_data_blocks: list[tuple[pd.DataFrame, int, int]] = []
 
         chart_font = "Malgun Gothic"
         title_font = {"name": chart_font, "size": 20, "bold": True, "color": "#111827"}
@@ -415,14 +417,10 @@ def _build_excel_report_bytes(
                     full_df = pd.DataFrame({"기간": axis_idx})
                     wide["기간"] = pd.to_datetime(wide["기간"], errors="coerce")
                     wide = full_df.merge(wide, on="기간", how="left")
-                # Put chart source into hidden _DATA sheet
+                # Put chart source into DATA sheet (written at end; keep ranges stable now)
                 src_row = data_next_row
                 src_col = 0
-                if data_ws is None:
-                    data_ws = workbook.add_worksheet(data_sheet_name)
-                    # Keep DATA visible (user requested), but create it last so it doesn't open first.
-                    writer.sheets[data_sheet_name] = data_ws
-                _write_chart_source_df(writer, data_sheet_name, df=wide, startrow=src_row, startcol=src_col)
+                pending_data_blocks.append((wide, src_row, src_col))
                 date_col = src_col
                 date_first = src_row + 1
                 date_last = src_row + len(wide)
@@ -529,6 +527,11 @@ def _build_excel_report_bytes(
                 worksheet.fit_to_pages(1, 0)
             except Exception:
                 pass
+
+        # Write DATA sheet last so it appears at the end of tabs.
+        if pending_data_blocks:
+            for df_block, r0, c0 in pending_data_blocks:
+                _write_chart_source_df(writer, data_sheet_name, df=df_block, startrow=r0, startcol=c0)
 
     output.seek(0)
     return output.getvalue()
@@ -2183,12 +2186,37 @@ try:
                 end_date_str = end_date.strftime("%Y%m%d")
                 filename = f"공장비교_리포트_{start_date_str}_{end_date_str}.xlsx"
                 st.download_button(
-                    "엑셀 다운로드",
+                    "공장비교 리포트 다운로드",
                     data=st.session_state[excel_key],
                     file_name=filename,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary",
                 )
+
+            # RAWDATA download (original result excel)
+            st.markdown("")
+            st.caption("원본 결과 파일(`유효생산량_결과*.xlsx`) 다운로드")
+            raw_candidates = result_candidates if "result_candidates" in globals() else []
+            if raw_candidates:
+                if len(raw_candidates) == 1:
+                    raw_path = raw_candidates[0]
+                else:
+                    raw_path = st.selectbox(
+                        "ROWDATA 파일 선택",
+                        options=raw_candidates,
+                        format_func=lambda p: f"{p.name} (수정: {datetime.fromtimestamp(p.stat().st_mtime).strftime('%Y-%m-%d %H:%M')})",
+                    )
+
+                try:
+                    raw_bytes = Path(raw_path).read_bytes()
+                    st.download_button(
+                        "ROWDATA 다운로드",
+                        data=raw_bytes,
+                        file_name=Path(raw_path).name,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                except Exception as e:
+                    st.error(f"ROWDATA 다운로드 준비 실패: {e}")
 
 except Exception as e:
     st.error(f"❌ 오류가 발생했습니다: {str(e)}")
