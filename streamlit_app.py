@@ -17,14 +17,43 @@ def _get_korean_font_properties() -> _fm.FontProperties | None:
     env_path = os.environ.get("KOREAN_FONT_PATH")
     if env_path and Path(env_path).exists():
         try:
-            return _fm.FontProperties(fname=str(env_path))
+            fp = _fm.FontProperties(fname=str(env_path))
+            try:
+                _fm.fontManager.addfont(str(env_path))
+            except Exception:
+                pass
+            return fp
         except Exception:
             return None
+
+    # Repo-local fonts (recommended for Streamlit Cloud/Linux)
+    try:
+        here = Path(__file__).resolve().parent
+        for rel in ("assets/fonts", "fonts", ".fonts"):
+            d = here / rel
+            if not d.exists():
+                continue
+            for ext in ("*.ttf", "*.otf", "*.ttc"):
+                for p in sorted(d.glob(ext)):
+                    try:
+                        _fm.fontManager.addfont(str(p))
+                    except Exception:
+                        pass
+                    try:
+                        return _fm.FontProperties(fname=str(p))
+                    except Exception:
+                        continue
+    except Exception:
+        pass
 
     # Windows common
     win_path = Path(r"C:\Windows\Fonts\malgun.ttf")
     if win_path.exists():
         try:
+            try:
+                _fm.fontManager.addfont(str(win_path))
+            except Exception:
+                pass
             return _fm.FontProperties(fname=str(win_path))
         except Exception:
             return None
@@ -164,6 +193,7 @@ def _build_excel_report_bytes(
         workbook = writer.book
         fmt_title = workbook.add_format({"bold": True, "font_size": 14})
         fmt_section = workbook.add_format({"bold": True, "font_size": 12})
+        fmt_note = workbook.add_format({"font_size": 10, "font_color": "#6b7280"})
 
         for metric in metric_order:
             sheet_name = _safe_sheet_name(metric_sheet_map.get(metric, metric))
@@ -172,64 +202,90 @@ def _build_excel_report_bytes(
             factory_table = payload.get("factory_table")
             daily_table = payload.get("daily_table")
             factory_daily_table = payload.get("factory_daily_table")
-            bar_fig = payload.get("bar_fig")
-            line_fig = payload.get("line_fig")
 
-            start_row = 0
             worksheet = workbook.add_worksheet(sheet_name)
             writer.sheets[sheet_name] = worksheet
 
+            # Fixed layout (0-based row/col)
+            # Keep starts stable for report usage, but if a table is longer than expected,
+            # later sections are pushed down (never overlap).
+            LAYOUT = {
+                "title_row": 0,
+                "desc_row": 2,
+                "factory_header_row": 4,
+                "factory_table_row": 5,
+                "factory_chart_row": 5,
+                "daily_header_row": 12,
+                "daily_table_row": 13,
+                "daily_chart_row": 13,
+                "detail_header_row": 23,
+                "detail_table_row": 24,
+                "chart_col": 6,  # column G
+            }
+
             now_txt = datetime.now(ZoneInfo(tz_name)).strftime("%Y-%m-%d %H:%M")
             title = f"{metric} 리포트 ({start_date_str} ~ {end_date_str})  생성: {now_txt}"
-            worksheet.write(start_row, 0, title, fmt_title)
-            start_row += 2
+            worksheet.write(LAYOUT["title_row"], 0, title, fmt_title)
 
             desc = metric_desc.get(metric)
             if desc:
-                worksheet.write(start_row, 0, f"설명: {desc}")
-                start_row += 2
+                worksheet.write(LAYOUT["desc_row"], 0, f"설명: {desc}")
 
-            worksheet.write(start_row, 0, "선택지표 (공장 비교)", fmt_section)
-            start_row += 1
+            worksheet.write(LAYOUT["factory_header_row"], 0, "선택지표 (공장 비교)", fmt_section)
+            worksheet.write(LAYOUT["factory_header_row"], LAYOUT["chart_col"], "차트(PNG)", fmt_note)
+
+            cur_row = LAYOUT["factory_table_row"]
             if isinstance(factory_table, pd.DataFrame) and len(factory_table) > 0:
-                factory_table.to_excel(writer, sheet_name=sheet_name, index=False, startrow=start_row, startcol=0)
-                table_rows = len(factory_table) + 1
+                factory_table.to_excel(writer, sheet_name=sheet_name, index=False, startrow=cur_row, startcol=0)
+                factory_rows = len(factory_table) + 1
             else:
-                worksheet.write(start_row, 0, "데이터 없음")
-                table_rows = 1
+                worksheet.write(cur_row, 0, "데이터 없음")
+                factory_rows = 1
 
             bar_png = _bar_png_from_factory_table(factory_table, metric)
             if bar_png:
-                worksheet.insert_image(start_row, 6, "bar.png", {"image_data": io.BytesIO(bar_png), "x_scale": 0.95, "y_scale": 0.95})
+                worksheet.insert_image(LAYOUT["factory_chart_row"], LAYOUT["chart_col"], "bar.png", {"image_data": io.BytesIO(bar_png), "x_scale": 0.95, "y_scale": 0.95})
 
-            start_row += table_rows + 3
+            # Next section: start at fixed minimum, but push down if factory table is long
+            factory_end = cur_row + factory_rows
+            daily_header_row = max(LAYOUT["daily_header_row"], factory_end + 2)
+            daily_table_row = daily_header_row + 1
 
-            worksheet.write(start_row, 0, "일별요약", fmt_section)
-            start_row += 1
+            worksheet.write(daily_header_row, 0, "일별요약", fmt_section)
+            worksheet.write(daily_header_row, LAYOUT["chart_col"], "차트(PNG)", fmt_note)
+
             if isinstance(daily_table, pd.DataFrame) and len(daily_table) > 0:
-                daily_table.to_excel(writer, sheet_name=sheet_name, index=False, startrow=start_row, startcol=0)
+                daily_table.to_excel(writer, sheet_name=sheet_name, index=False, startrow=daily_table_row, startcol=0)
                 daily_rows = len(daily_table) + 1
             else:
-                worksheet.write(start_row, 0, "데이터 없음")
+                worksheet.write(daily_table_row, 0, "데이터 없음")
                 daily_rows = 1
 
             line_png = _line_png_from_ts_df(payload.get("line_ts_df"), metric)
             if line_png:
-                worksheet.insert_image(start_row, 6, "line.png", {"image_data": io.BytesIO(line_png), "x_scale": 0.95, "y_scale": 0.95})
+                worksheet.insert_image(daily_table_row, LAYOUT["chart_col"], "line.png", {"image_data": io.BytesIO(line_png), "x_scale": 0.95, "y_scale": 0.95})
 
-            start_row += daily_rows + 3
+            daily_end = daily_table_row + daily_rows
+            detail_header_row = max(LAYOUT["detail_header_row"], daily_end + 2)
+            detail_table_row = detail_header_row + 1
 
-            worksheet.write(start_row, 0, "관별(공장별) 일별상세", fmt_section)
-            start_row += 1
+            worksheet.write(detail_header_row, 0, "관별(공장별) 일별상세", fmt_section)
             if isinstance(factory_daily_table, pd.DataFrame) and len(factory_daily_table) > 0:
-                factory_daily_table.to_excel(writer, sheet_name=sheet_name, index=False, startrow=start_row, startcol=0)
+                factory_daily_table.to_excel(writer, sheet_name=sheet_name, index=False, startrow=detail_table_row, startcol=0)
             else:
-                worksheet.write(start_row, 0, "데이터 없음")
+                worksheet.write(detail_table_row, 0, "데이터 없음")
 
             worksheet.freeze_panes(1, 0)
             worksheet.set_column(0, 0, 14)
             worksheet.set_column(1, 1, 16)
             worksheet.set_column(2, 20, 18)
+            # A4 landscape print-friendly
+            try:
+                worksheet.set_landscape()
+                worksheet.set_paper(9)  # A4
+                worksheet.fit_to_pages(1, 0)
+            except Exception:
+                pass
 
     output.seek(0)
     return output.getvalue()
