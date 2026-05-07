@@ -67,7 +67,7 @@ def _apply_table_formats(workbook, worksheet, *, df: pd.DataFrame, startrow: int
             fmt = fmt_date
         elif "(pcs)" in name or name in {"총실적", "유효생산량", "과생산량", "불필요생산량", "총부족수량"}:
             fmt = fmt_int
-        elif "(%)" in name:
+        elif "(%)" in name or name in {"선택지표"}:
             fmt = fmt_pct
         else:
             fmt = None
@@ -76,7 +76,8 @@ def _apply_table_formats(workbook, worksheet, *, df: pd.DataFrame, startrow: int
             continue
 
         rng = f"{xl_rowcol_to_cell(data_first_row, c)}:{xl_rowcol_to_cell(data_last_row, c)}"
-        worksheet.conditional_format(rng, {"type": "no_errors", "format": fmt})
+        # Apply number format visually without overriding column formats of other tables.
+        worksheet.conditional_format(rng, {"type": "formula", "criteria": "TRUE", "format": fmt})
 
 
 def _write_chart_source_df(
@@ -163,11 +164,10 @@ def _build_excel_report_bytes(
             sec1_table_row = 23   # row 24: table header row
 
             sec2_top_min = 31     # row 32: "일별요약"
-            sec2_chart_row_min = 32
+            sec2_chart_row_min = 33  # row 34: line chart (match 규격대응률 sheet)
             sec2_table_row_min = 50  # row 51: table header row (chart above)
 
-            chart_x_scale = 1.35
-            chart_y_scale = 1.15
+            chart_size = {"width": 1440, "height": 720}  # ~15in x 7.5in
             chart_gap_after_table = 6
 
             now_txt = datetime.now(ZoneInfo(tz_name)).strftime("%Y-%m-%d %H:%M")
@@ -244,7 +244,8 @@ def _build_excel_report_bytes(
                 chart.set_style(10)
                 chart.set_plotarea({"border": {"none": True}, "fill": {"color": "#ffffff"}})
                 chart.set_chartarea({"border": {"none": True}, "fill": {"color": "#ffffff"}})
-                worksheet.insert_chart(chart_row, 0, chart, {"x_scale": chart_x_scale, "y_scale": chart_y_scale})
+                chart.set_size(chart_size)
+                worksheet.insert_chart(chart_row, 0, chart)
             else:
                 worksheet.write(table_row, 0, "데이터 없음")
 
@@ -320,7 +321,8 @@ def _build_excel_report_bytes(
                         }
                     )
 
-                worksheet.insert_chart(chart2_row, 0, chart2, {"x_scale": chart_x_scale, "y_scale": chart_y_scale})
+                chart2.set_size(chart_size)
+                worksheet.insert_chart(chart2_row, 0, chart2)
 
             if isinstance(daily_table, pd.DataFrame) and len(daily_table) > 0:
                 _df_to_sheet(writer, sheet_name=sheet_name, df=daily_table, startrow=table2_row, startcol=col0)
