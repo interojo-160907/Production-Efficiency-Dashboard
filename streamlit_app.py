@@ -36,29 +36,47 @@ def _df_to_sheet(
 
 
 def _apply_table_formats(workbook, worksheet, *, df: pd.DataFrame, startrow: int, startcol: int) -> None:
+    # IMPORTANT: Do not use set_column formats here because multiple tables share the same worksheet
+    # and column-level formats would overwrite each other. Apply formats to the table cell ranges only.
     fmt_int = workbook.add_format({"num_format": "#,##0"})
     fmt_pct = workbook.add_format({"num_format": "0.0\"%\""})
     fmt_date = workbook.add_format({"num_format": "yyyy-mm-dd"})
 
+    nrows = len(df)
+    if nrows <= 0:
+        return
+
+    data_first_row = startrow + 1
+    data_last_row = startrow + nrows
+
     for idx, col in enumerate(df.columns):
         c = startcol + idx
         name = str(col)
-        width = 14
-        fmt = None
+
+        # Width is safe to set at column level (style is not).
+        if name in {"날짜", "기간"}:
+            worksheet.set_column(c, c, 12)
+        elif "(pcs)" in name or name in {"총실적", "유효생산량", "과생산량", "불필요생산량", "총부족수량"}:
+            worksheet.set_column(c, c, 16)
+        elif "(%)" in name:
+            worksheet.set_column(c, c, 14)
+        else:
+            worksheet.set_column(c, c, 16 if len(name) <= 10 else 20)
 
         if name in {"날짜", "기간"}:
-            width = 12
             fmt = fmt_date
         elif "(pcs)" in name or name in {"총실적", "유효생산량", "과생산량", "불필요생산량", "총부족수량"}:
-            width = 16
             fmt = fmt_int
         elif "(%)" in name:
-            width = 14
             fmt = fmt_pct
         else:
-            width = 16 if len(name) <= 10 else 20
+            fmt = None
 
-        worksheet.set_column(c, c, width, fmt)
+        if fmt is None:
+            continue
+
+        rng = f"{xl_rowcol_to_cell(data_first_row, c)}:{xl_rowcol_to_cell(data_last_row, c)}"
+        worksheet.conditional_format(rng, {"type": "no_errors", "format": fmt})
 
 
 def _write_chart_source_df(
@@ -98,7 +116,10 @@ def _build_excel_report_bytes(
         # Keep it hidden so the report sheets remain clean.
         data_sheet_name = "DATA"
         data_ws = workbook.add_worksheet(data_sheet_name)
-        data_ws.hide()
+        try:
+            data_ws.very_hidden()
+        except Exception:
+            data_ws.hide()
         writer.sheets[data_sheet_name] = data_ws
         data_next_row = 0
 
@@ -211,7 +232,7 @@ def _build_excel_report_bytes(
                     {
                         "name": "",
                         "min": 0,
-                        "max": y_max,
+                        "max": 100,
                         "name_font": axis_title_font,
                         "num_font": axis_num_font,
                         "major_gridlines": {"visible": True, "line": {"color": gridline_color}},
@@ -271,7 +292,7 @@ def _build_excel_report_bytes(
                     {
                         "name": "",
                         "min": 0,
-                        "max": y2_max,
+                        "max": 100,
                         "name_font": axis_title_font,
                         "num_font": axis_num_font,
                         "major_gridlines": {"visible": True, "line": {"color": gridline_color}},
