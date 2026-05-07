@@ -188,6 +188,14 @@ def _build_excel_report_bytes(
             ymax = max(20, min(100, ymax))
             return ymax
 
+        # Parse dates for chart bucketing (Excel axis)
+        try:
+            _start_date_obj = pd.to_datetime(start_date_str).date()
+            _end_date_obj = pd.to_datetime(end_date_str).date()
+        except Exception:
+            _start_date_obj = None
+            _end_date_obj = None
+
         for metric in metric_order:
             sheet_name = _safe_sheet_name(metric_sheet_map.get(metric, metric))
             payload = export_payload.get(metric, {})
@@ -385,6 +393,24 @@ def _build_excel_report_bytes(
                 tmp["기간"] = pd.to_datetime(tmp["기간"], errors="coerce")
                 tmp = tmp.dropna(subset=["기간"])
                 wide = tmp.pivot_table(index="기간", columns="공장", values="값", aggfunc="mean").reset_index()
+
+                # Extend x-axis like dashboard:
+                # - 당월/전월: extend to month-end (values after last data remain blank)
+                # - 기간조회: keep selected end_date
+                filter_option = payload.get("filter_option")
+                axis_start = _start_date_obj
+                axis_end = _end_date_obj
+                if axis_start is not None and axis_end is not None and filter_option in {"당월", "전월"}:
+                    try:
+                        axis_end = _month_end(axis_start)
+                    except Exception:
+                        axis_end = _end_date_obj
+
+                if axis_start is not None and axis_end is not None:
+                    full_days = pd.date_range(pd.Timestamp(axis_start), pd.Timestamp(axis_end), freq="D")
+                    full_df = pd.DataFrame({"기간": full_days})
+                    wide["기간"] = pd.to_datetime(wide["기간"], errors="coerce")
+                    wide = full_df.merge(wide, on="기간", how="left")
                 # Put chart source into hidden _DATA sheet
                 src_row = data_next_row
                 src_col = 0
@@ -397,18 +423,33 @@ def _build_excel_report_bytes(
                 chart2 = workbook.add_chart({"type": "line"})
                 y2_max = _ymax_0_100(pd.to_numeric(tmp["값"], errors="coerce").max())
                 chart2.set_title({"name": f"공장별 {metric} 추이", "name_font": title_font})
-                chart2.set_x_axis(
-                    {
-                        "name": "기간",
-                        "name_font": axis_title_font,
-                        "num_font": axis_num_font,
-                        "num_format": "yyyy-mm-dd",
-                        "label_position": "low",
-                        "major_gridlines": {"visible": False},
-                        "line": {"none": True},
-                        "tick_mark": "none",
-                    }
-                )
+                # Bucket x-axis labels similar to dashboard: D (<=30d), W (<=210d), else M.
+                bucket = "D"
+                if _start_date_obj is not None and _end_date_obj is not None:
+                    span_days = (_end_date_obj - _start_date_obj).days + 1
+                    if span_days <= 30:
+                        bucket = "D"
+                    elif span_days <= 210:
+                        bucket = "W"
+                    else:
+                        bucket = "M"
+
+                x_axis_opts = {
+                    "name": "기간",
+                    "name_font": axis_title_font,
+                    "num_font": axis_num_font,
+                    "num_format": "yyyy-mm-dd",
+                    "label_position": "low",
+                    "major_gridlines": {"visible": False},
+                    "line": {"none": True},
+                    "tick_mark": "none",
+                    "date_axis": True,
+                }
+                if bucket == "W":
+                    x_axis_opts.update({"major_unit": 7, "major_unit_type": "days"})
+                elif bucket == "M":
+                    x_axis_opts.update({"num_format": "yyyy-mm", "major_unit": 1, "major_unit_type": "months"})
+                chart2.set_x_axis(x_axis_opts)
                 chart2.set_y_axis(
                     {
                         "name": "",
@@ -2107,6 +2148,7 @@ try:
                                 "kpi_valid": (valid_rate, valid_prod),
                                 "kpi_over": (over_rate, over_prod),
                                 "kpi_waste": (waste_rate, waste_prod),
+                                "filter_option": filter_option,
                             }
 
                         start_date_str = start_date.strftime("%Y-%m-%d")
