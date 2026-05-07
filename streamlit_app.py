@@ -220,7 +220,7 @@ def _build_excel_report_bytes(
                 chart.set_title({"name": f"공장별 {metric} (%)", "name_font": title_font})
                 chart.set_x_axis(
                     {
-                        "name": "공장",
+                        "name": "",
                         "name_font": axis_title_font,
                         "num_font": axis_num_font,
                         "major_gridlines": {"visible": False},
@@ -285,8 +285,6 @@ def _build_excel_report_bytes(
                         "major_gridlines": {"visible": False},
                         "line": {"none": True},
                         "tick_mark": "none",
-                        "text_axis": True,
-                        "rotation": 45,
                     }
                 )
                 chart2.set_y_axis(
