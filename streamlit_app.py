@@ -9,79 +9,7 @@ import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 import io
-import matplotlib.pyplot as plt
-from matplotlib import rcParams
-from matplotlib import font_manager as _fm
-
-def _get_korean_font_properties() -> _fm.FontProperties | None:
-    env_path = os.environ.get("KOREAN_FONT_PATH")
-    if env_path and Path(env_path).exists():
-        try:
-            fp = _fm.FontProperties(fname=str(env_path))
-            try:
-                _fm.fontManager.addfont(str(env_path))
-            except Exception:
-                pass
-            return fp
-        except Exception:
-            return None
-
-    # Repo-local fonts (recommended for Streamlit Cloud/Linux)
-    try:
-        here = Path(__file__).resolve().parent
-        for rel in ("assets/fonts", "fonts", ".fonts"):
-            d = here / rel
-            if not d.exists():
-                continue
-            for ext in ("*.ttf", "*.otf", "*.ttc"):
-                for p in sorted(d.glob(ext)):
-                    try:
-                        _fm.fontManager.addfont(str(p))
-                    except Exception:
-                        pass
-                    try:
-                        return _fm.FontProperties(fname=str(p))
-                    except Exception:
-                        continue
-    except Exception:
-        pass
-
-    # Windows common
-    win_path = Path(r"C:\Windows\Fonts\malgun.ttf")
-    if win_path.exists():
-        try:
-            try:
-                _fm.fontManager.addfont(str(win_path))
-            except Exception:
-                pass
-            return _fm.FontProperties(fname=str(win_path))
-        except Exception:
-            return None
-
-    # Best-effort by family name (do not crash if missing on Linux/Streamlit Cloud)
-    candidates = [
-        "Malgun Gothic",
-        "AppleGothic",
-        "NanumGothic",
-        "Noto Sans CJK KR",
-        "Noto Sans KR",
-    ]
-    for fam in candidates:
-        try:
-            fp = _fm.FontProperties(family=fam)
-            resolved = _fm.findfont(fp, fallback_to_default=True)
-            if resolved and Path(resolved).exists():
-                return _fm.FontProperties(fname=resolved)
-        except Exception:
-            continue
-
-    return None
-
-
-_KOR_FP = _get_korean_font_properties()
-if _KOR_FP is not None:
-    rcParams["font.family"] = _KOR_FP.get_name()
-rcParams["axes.unicode_minus"] = False
+from xlsxwriter.utility import xl_rowcol_to_cell
 
 
 def _safe_sheet_name(name: str) -> str:
@@ -91,91 +19,20 @@ def _safe_sheet_name(name: str) -> str:
     return name[:31]
 
 
-def _mpl_to_png_bytes(fig) -> bytes:
-    buf = io.BytesIO()
-    try:
-        fig.tight_layout()
-    except Exception:
-        pass
-    fig.savefig(buf, format="png", dpi=240, bbox_inches="tight", pad_inches=0.35, facecolor="white")
-    plt.close(fig)
-    buf.seek(0)
-    return buf.getvalue()
-
-
-def _bar_png_from_factory_table(factory_table: pd.DataFrame, metric: str) -> bytes | None:
-    if factory_table is None or len(factory_table) == 0:
-        return None
-    if "공장" not in factory_table.columns or "선택지표" not in factory_table.columns:
-        return None
-
-    x = factory_table["공장"].astype(str).tolist()
-    y = pd.to_numeric(factory_table["선택지표"], errors="coerce").fillna(0).tolist()
-
-    fig, ax = plt.subplots(figsize=(10.5, 3.8))
-    bars = ax.bar(x, y, color=["#2563eb", "#f97316", "#16a34a"][: len(x)])
-    ax.set_ylim(0, 105)
-    if _KOR_FP is not None:
-        ax.set_title(f"공장별 {metric} (%)", pad=10, fontproperties=_KOR_FP)
-        ax.set_ylabel("%", fontproperties=_KOR_FP)
-    else:
-        ax.set_title(f"공장별 {metric} (%)", pad=10)
-        ax.set_ylabel("%")
-    ax.grid(axis="y", alpha=0.25)
-    ax.tick_params(axis="x", labelrotation=0)
-    if _KOR_FP is not None:
-        for label in ax.get_xticklabels() + ax.get_yticklabels():
-            label.set_fontproperties(_KOR_FP)
-    for b, v in zip(bars, y, strict=False):
-        ax.text(
-            b.get_x() + b.get_width() / 2,
-            min(v + 1.2, 104),
-            f"{v:.1f}%",
-            ha="center",
-            va="bottom",
-            fontsize=9,
-            fontproperties=_KOR_FP if _KOR_FP is not None else None,
-        )
-
-    return _mpl_to_png_bytes(fig)
-
-
-def _line_png_from_ts_df(ts_df: pd.DataFrame, metric: str) -> bytes | None:
-    if ts_df is None or len(ts_df) == 0:
-        return None
-    if not {"기간", "공장", "값"}.issubset(set(ts_df.columns)):
-        return None
-
-    df = ts_df.copy()
-    df["기간"] = pd.to_datetime(df["기간"], errors="coerce")
-    df["값"] = pd.to_numeric(df["값"], errors="coerce")
-    df = df.dropna(subset=["기간", "값"])
-    if len(df) == 0:
-        return None
-
-    fig, ax = plt.subplots(figsize=(10.5, 3.8))
-    for factory, g in df.groupby("공장", sort=False):
-        g = g.sort_values("기간")
-        ax.plot(g["기간"], g["값"], linewidth=2.2, label=str(factory))
-
-    ax.set_ylim(0, 105)
-    if _KOR_FP is not None:
-        ax.set_title(f"공장별 {metric} 추이", pad=10, fontproperties=_KOR_FP)
-        ax.set_ylabel("%", fontproperties=_KOR_FP)
-    else:
-        ax.set_title(f"공장별 {metric} 추이", pad=10)
-        ax.set_ylabel("%")
-    ax.grid(alpha=0.25)
-    leg = ax.legend(loc="upper left", ncols=3, fontsize=8, frameon=False)
-    if _KOR_FP is not None and leg is not None:
-        for t in leg.get_texts():
-            t.set_fontproperties(_KOR_FP)
-    fig.autofmt_xdate(rotation=45, ha="right")
-    if _KOR_FP is not None:
-        for label in ax.get_xticklabels() + ax.get_yticklabels():
-            label.set_fontproperties(_KOR_FP)
-
-    return _mpl_to_png_bytes(fig)
+def _df_to_sheet(
+    writer: pd.ExcelWriter,
+    *,
+    sheet_name: str,
+    df: pd.DataFrame,
+    startrow: int,
+    startcol: int,
+) -> tuple[int, int, int, int]:
+    df.to_excel(writer, sheet_name=sheet_name, index=False, startrow=startrow, startcol=startcol)
+    first_row = startrow
+    last_row = startrow + len(df)  # include header row
+    first_col = startcol
+    last_col = startcol + max(len(df.columns) - 1, 0)
+    return first_row, last_row, first_col, last_col
 
 
 def _build_excel_report_bytes(
@@ -194,6 +51,7 @@ def _build_excel_report_bytes(
         fmt_title = workbook.add_format({"bold": True, "font_size": 14})
         fmt_section = workbook.add_format({"bold": True, "font_size": 12})
         fmt_note = workbook.add_format({"font_size": 10, "font_color": "#6b7280"})
+        fmt_header_bg = workbook.add_format({"bold": True, "bg_color": "#f3f4f6", "border": 1})
 
         for metric in metric_order:
             sheet_name = _safe_sheet_name(metric_sheet_map.get(metric, metric))
@@ -206,74 +64,120 @@ def _build_excel_report_bytes(
             worksheet = workbook.add_worksheet(sheet_name)
             writer.sheets[sheet_name] = worksheet
 
-            # Fixed layout (0-based row/col)
-            # Keep starts stable for report usage, but if a table is longer than expected,
-            # later sections are pushed down (never overlap).
-            LAYOUT = {
-                "title_row": 0,
-                "desc_row": 2,
-                "factory_header_row": 4,
-                "factory_table_row": 5,
-                "factory_chart_row": 5,
-                "daily_header_row": 12,
-                "daily_table_row": 13,
-                "daily_chart_row": 13,
-                "detail_header_row": 23,
-                "detail_table_row": 24,
-                "chart_col": 6,  # column G
-            }
+            # Layout (0-based): chart first, then table below (never overlap).
+            chart_height_rows = 18
+            col0 = 0
+            hidden_col = 12  # column M for chart source data
 
             now_txt = datetime.now(ZoneInfo(tz_name)).strftime("%Y-%m-%d %H:%M")
             title = f"{metric} 리포트 ({start_date_str} ~ {end_date_str})  생성: {now_txt}"
-            worksheet.write(LAYOUT["title_row"], 0, title, fmt_title)
+            worksheet.write(0, 0, title, fmt_title)
 
             desc = metric_desc.get(metric)
             if desc:
-                worksheet.write(LAYOUT["desc_row"], 0, f"설명: {desc}")
+                worksheet.write(2, 0, f"설명: {desc}")
 
-            worksheet.write(LAYOUT["factory_header_row"], 0, "선택지표 (공장 비교)", fmt_section)
-            worksheet.write(LAYOUT["factory_header_row"], LAYOUT["chart_col"], "차트(PNG)", fmt_note)
+            # ---- Section 1: Factory bar chart + table ----
+            sec1_top = 4
+            worksheet.write(sec1_top, 0, "선택지표 (공장 비교)", fmt_section)
 
-            cur_row = LAYOUT["factory_table_row"]
+            chart_row = sec1_top + 1
+            table_row = chart_row + chart_height_rows + 1
+
             if isinstance(factory_table, pd.DataFrame) and len(factory_table) > 0:
-                factory_table.to_excel(writer, sheet_name=sheet_name, index=False, startrow=cur_row, startcol=0)
-                factory_rows = len(factory_table) + 1
+                # Write table below chart
+                _df_to_sheet(writer, sheet_name=sheet_name, df=factory_table, startrow=table_row, startcol=col0)
+
+                # Build bar chart from table range
+                first_row = table_row
+                header_row = table_row
+                data_first_row = table_row + 1
+                data_last_row = table_row + len(factory_table)
+
+                # Determine columns by name
+                cols = list(factory_table.columns)
+                cat_col = cols.index("공장")
+                val_col = cols.index("선택지표") if "선택지표" in cols else (len(cols) - 1)
+
+                categories = f"='{sheet_name}'!{xl_rowcol_to_cell(data_first_row, cat_col)}:{xl_rowcol_to_cell(data_last_row, cat_col)}"
+                values = f"='{sheet_name}'!{xl_rowcol_to_cell(data_first_row, val_col)}:{xl_rowcol_to_cell(data_last_row, val_col)}"
+
+                chart = workbook.add_chart({"type": "column"})
+                chart.add_series(
+                    {
+                        "name": metric,
+                        "categories": categories,
+                        "values": values,
+                        "data_labels": {"value": True, "num_format": "0.0\"%\""},
+                        "fill": {"color": "#2563eb"},
+                        "border": {"none": True},
+                    }
+                )
+                chart.set_title({"name": f"공장별 {metric} (%)"})
+                chart.set_y_axis({"name": "%", "min": 0, "max": 100, "major_gridlines": {"visible": True}})
+                chart.set_legend({"none": True})
+                chart.set_style(10)
+                worksheet.insert_chart(chart_row, 0, chart, {"x_scale": 1.5, "y_scale": 1.2})
             else:
-                worksheet.write(cur_row, 0, "데이터 없음")
-                factory_rows = 1
+                worksheet.write(table_row, 0, "데이터 없음")
 
-            bar_png = _bar_png_from_factory_table(factory_table, metric)
-            if bar_png:
-                worksheet.insert_image(LAYOUT["factory_chart_row"], LAYOUT["chart_col"], "bar.png", {"image_data": io.BytesIO(bar_png), "x_scale": 0.95, "y_scale": 0.95})
+            # ---- Section 2: Daily line chart + table ----
+            sec2_top = table_row + (len(factory_table) + 4 if isinstance(factory_table, pd.DataFrame) else 8)
+            worksheet.write(sec2_top, 0, "일별요약", fmt_section)
 
-            # Next section: start at fixed minimum, but push down if factory table is long
-            factory_end = cur_row + factory_rows
-            daily_header_row = max(LAYOUT["daily_header_row"], factory_end + 2)
-            daily_table_row = daily_header_row + 1
+            chart2_row = sec2_top + 1
+            table2_row = chart2_row + chart_height_rows + 1
 
-            worksheet.write(daily_header_row, 0, "일별요약", fmt_section)
-            worksheet.write(daily_header_row, LAYOUT["chart_col"], "차트(PNG)", fmt_note)
+            line_ts_df = payload.get("line_ts_df")
+            if isinstance(line_ts_df, pd.DataFrame) and len(line_ts_df) > 0:
+                # Pivot to wide for chart source
+                tmp = line_ts_df.copy()
+                tmp["기간"] = pd.to_datetime(tmp["기간"], errors="coerce")
+                tmp = tmp.dropna(subset=["기간"])
+                wide = tmp.pivot_table(index="기간", columns="공장", values="값", aggfunc="mean").reset_index()
+
+                # Put chart source at hidden_col
+                src_row = chart2_row
+                src_col = hidden_col
+                _df_to_sheet(writer, sheet_name=sheet_name, df=wide, startrow=src_row, startcol=src_col)
+                worksheet.set_column(src_col, src_col + max(len(wide.columns) - 1, 0), 2, None, {"hidden": True})
+
+                date_col = src_col
+                date_first = src_row + 1
+                date_last = src_row + len(wide)
+
+                chart2 = workbook.add_chart({"type": "line"})
+                chart2.set_title({"name": f"공장별 {metric} 추이"})
+                chart2.set_y_axis({"name": "%", "min": 0, "max": 100, "major_gridlines": {"visible": True}})
+                chart2.set_legend({"position": "top"})
+                chart2.set_style(10)
+
+                for j, col_name in enumerate(wide.columns[1:], start=1):
+                    val_c = src_col + j
+                    chart2.add_series(
+                        {
+                            "name": str(col_name),
+                            "categories": f"='{sheet_name}'!{xl_rowcol_to_cell(date_first, date_col)}:{xl_rowcol_to_cell(date_last, date_col)}",
+                            "values": f"='{sheet_name}'!{xl_rowcol_to_cell(date_first, val_c)}:{xl_rowcol_to_cell(date_last, val_c)}",
+                            "line": {"width": 2.0},
+                        }
+                    )
+
+                worksheet.insert_chart(chart2_row, 0, chart2, {"x_scale": 1.5, "y_scale": 1.2})
 
             if isinstance(daily_table, pd.DataFrame) and len(daily_table) > 0:
-                daily_table.to_excel(writer, sheet_name=sheet_name, index=False, startrow=daily_table_row, startcol=0)
-                daily_rows = len(daily_table) + 1
+                _df_to_sheet(writer, sheet_name=sheet_name, df=daily_table, startrow=table2_row, startcol=col0)
             else:
-                worksheet.write(daily_table_row, 0, "데이터 없음")
-                daily_rows = 1
+                worksheet.write(table2_row, 0, "데이터 없음")
 
-            line_png = _line_png_from_ts_df(payload.get("line_ts_df"), metric)
-            if line_png:
-                worksheet.insert_image(daily_table_row, LAYOUT["chart_col"], "line.png", {"image_data": io.BytesIO(line_png), "x_scale": 0.95, "y_scale": 0.95})
-
-            daily_end = daily_table_row + daily_rows
-            detail_header_row = max(LAYOUT["detail_header_row"], daily_end + 2)
-            detail_table_row = detail_header_row + 1
-
-            worksheet.write(detail_header_row, 0, "관별(공장별) 일별상세", fmt_section)
+            # ---- Section 3: Factory daily detail table ----
+            sec3_top = table2_row + (len(daily_table) + 4 if isinstance(daily_table, pd.DataFrame) else 8)
+            worksheet.write(sec3_top, 0, "관별(공장별) 일별상세", fmt_section)
+            table3_row = sec3_top + 1
             if isinstance(factory_daily_table, pd.DataFrame) and len(factory_daily_table) > 0:
-                factory_daily_table.to_excel(writer, sheet_name=sheet_name, index=False, startrow=detail_table_row, startcol=0)
+                _df_to_sheet(writer, sheet_name=sheet_name, df=factory_daily_table, startrow=table3_row, startcol=col0)
             else:
-                worksheet.write(detail_table_row, 0, "데이터 없음")
+                worksheet.write(table3_row, 0, "데이터 없음")
 
             worksheet.freeze_panes(1, 0)
             worksheet.set_column(0, 0, 14)
@@ -320,21 +224,9 @@ def _build_factory_bar_fig(*, factory_data: pd.DataFrame, metric_option: str) ->
     }
     hover_data = {k: v for k, v in hover_data.items() if k in df.columns}
 
-    fig = px.bar(
-        df,
-        x="공장",
-        y="선택지표",
-        color="공장",
-        title=f"공장별 {metric_option} (%)",
-        text="선택지표",
-        hover_data=hover_data,
-    )
-    fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside", cliponaxis=False)
-    fig.update_layout(height=420, showlegend=False, margin=dict(l=0, r=0, t=60, b=0), yaxis=dict(range=[0, 105]))
-
     table_cols = ["공장", "총실적", pcs_col, metric_col, "선택지표"]
     table_cols = [c for c in table_cols if c in df.columns]
-    return df[table_cols].copy(), fig
+    return df[table_cols].copy(), None
 
 
 def _build_factory_line_fig(
