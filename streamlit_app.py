@@ -2195,7 +2195,6 @@ try:
 
             # RAWDATA download (original result excel)
             st.markdown("")
-            st.caption("원본 결과 파일(`유효생산량_결과*.xlsx`) 다운로드 (가장 최신 파일)")
             raw_candidates = result_candidates if "result_candidates" in globals() else []
             if raw_candidates:
                 raw_path = raw_candidates[0]  # newest (already sorted desc by mtime)
