@@ -13,9 +13,45 @@ import matplotlib.pyplot as plt
 from matplotlib import rcParams
 from matplotlib import font_manager as _fm
 
-_MALGUN_TTF = _fm.findfont("Malgun Gothic", fallback_to_default=False)
-_KOR_FP = _fm.FontProperties(fname=_MALGUN_TTF)
-rcParams["font.family"] = "Malgun Gothic"
+def _get_korean_font_properties() -> _fm.FontProperties | None:
+    env_path = os.environ.get("KOREAN_FONT_PATH")
+    if env_path and Path(env_path).exists():
+        try:
+            return _fm.FontProperties(fname=str(env_path))
+        except Exception:
+            return None
+
+    # Windows common
+    win_path = Path(r"C:\Windows\Fonts\malgun.ttf")
+    if win_path.exists():
+        try:
+            return _fm.FontProperties(fname=str(win_path))
+        except Exception:
+            return None
+
+    # Best-effort by family name (do not crash if missing on Linux/Streamlit Cloud)
+    candidates = [
+        "Malgun Gothic",
+        "AppleGothic",
+        "NanumGothic",
+        "Noto Sans CJK KR",
+        "Noto Sans KR",
+    ]
+    for fam in candidates:
+        try:
+            fp = _fm.FontProperties(family=fam)
+            resolved = _fm.findfont(fp, fallback_to_default=True)
+            if resolved and Path(resolved).exists():
+                return _fm.FontProperties(fname=resolved)
+        except Exception:
+            continue
+
+    return None
+
+
+_KOR_FP = _get_korean_font_properties()
+if _KOR_FP is not None:
+    rcParams["font.family"] = _KOR_FP.get_name()
 rcParams["axes.unicode_minus"] = False
 
 
@@ -50,12 +86,17 @@ def _bar_png_from_factory_table(factory_table: pd.DataFrame, metric: str) -> byt
     fig, ax = plt.subplots(figsize=(10.5, 3.8))
     bars = ax.bar(x, y, color=["#2563eb", "#f97316", "#16a34a"][: len(x)])
     ax.set_ylim(0, 105)
-    ax.set_title(f"공장별 {metric} (%)", pad=10, fontproperties=_KOR_FP)
-    ax.set_ylabel("%", fontproperties=_KOR_FP)
+    if _KOR_FP is not None:
+        ax.set_title(f"공장별 {metric} (%)", pad=10, fontproperties=_KOR_FP)
+        ax.set_ylabel("%", fontproperties=_KOR_FP)
+    else:
+        ax.set_title(f"공장별 {metric} (%)", pad=10)
+        ax.set_ylabel("%")
     ax.grid(axis="y", alpha=0.25)
     ax.tick_params(axis="x", labelrotation=0)
-    for label in ax.get_xticklabels() + ax.get_yticklabels():
-        label.set_fontproperties(_KOR_FP)
+    if _KOR_FP is not None:
+        for label in ax.get_xticklabels() + ax.get_yticklabels():
+            label.set_fontproperties(_KOR_FP)
     for b, v in zip(bars, y, strict=False):
         ax.text(
             b.get_x() + b.get_width() / 2,
@@ -64,7 +105,7 @@ def _bar_png_from_factory_table(factory_table: pd.DataFrame, metric: str) -> byt
             ha="center",
             va="bottom",
             fontsize=9,
-            fontproperties=_KOR_FP,
+            fontproperties=_KOR_FP if _KOR_FP is not None else None,
         )
 
     return _mpl_to_png_bytes(fig)
@@ -89,16 +130,21 @@ def _line_png_from_ts_df(ts_df: pd.DataFrame, metric: str) -> bytes | None:
         ax.plot(g["기간"], g["값"], linewidth=2.2, label=str(factory))
 
     ax.set_ylim(0, 105)
-    ax.set_title(f"공장별 {metric} 추이", pad=10, fontproperties=_KOR_FP)
-    ax.set_ylabel("%", fontproperties=_KOR_FP)
+    if _KOR_FP is not None:
+        ax.set_title(f"공장별 {metric} 추이", pad=10, fontproperties=_KOR_FP)
+        ax.set_ylabel("%", fontproperties=_KOR_FP)
+    else:
+        ax.set_title(f"공장별 {metric} 추이", pad=10)
+        ax.set_ylabel("%")
     ax.grid(alpha=0.25)
     leg = ax.legend(loc="upper left", ncols=3, fontsize=8, frameon=False)
-    if leg is not None:
+    if _KOR_FP is not None and leg is not None:
         for t in leg.get_texts():
             t.set_fontproperties(_KOR_FP)
     fig.autofmt_xdate(rotation=45, ha="right")
-    for label in ax.get_xticklabels() + ax.get_yticklabels():
-        label.set_fontproperties(_KOR_FP)
+    if _KOR_FP is not None:
+        for label in ax.get_xticklabels() + ax.get_yticklabels():
+            label.set_fontproperties(_KOR_FP)
 
     return _mpl_to_png_bytes(fig)
 
