@@ -129,7 +129,16 @@ def _build_excel_report_bytes(
         axis_title_font = {"name": chart_font, "size": 11, "bold": False, "color": "#374151"}
         axis_num_font = {"name": chart_font, "size": 10, "color": "#374151"}
         legend_font = {"name": chart_font, "size": 10, "color": "#374151"}
-        gridline_color = "#e5e7eb"
+        # XlsxWriter doesn't reliably support alpha on gridlines across Excel versions,
+        # so approximate "50% transparency" with a lighter color.
+        gridline_color = "#eef2f7"
+
+        # Chart boxes sized to fixed cell ranges:
+        # - Bar:  A6:G23  (7 cols wide, 18 rows tall)
+        # - Line: A34:T51 (20 cols wide, 18 rows tall)
+        # Width/height are in pixels for XlsxWriter.
+        bar_chart_box = {"width": 900, "height": 430}
+        line_chart_box = {"width": 1800, "height": 430}
 
         def _ymax_0_100(series_max: float | None) -> int:
             if series_max is None:
@@ -208,7 +217,11 @@ def _build_excel_report_bytes(
                         "name": metric,
                         "categories": categories,
                         "values": values,
-                        "data_labels": {"value": True, "num_format": "0.0\"%\""},
+                        "data_labels": {
+                            "value": True,
+                            "num_format": "0.0\"%\"",
+                            "font": {"name": chart_font, "size": 16, "bold": True, "color": "#111827"},
+                        },
                         "gap": 70,
                         "overlap": 0,
                         "points": [
@@ -246,7 +259,8 @@ def _build_excel_report_bytes(
                 chart.set_style(10)
                 chart.set_plotarea({"border": {"none": True}, "fill": {"color": "#ffffff"}})
                 chart.set_chartarea({"border": {"none": True}, "fill": {"color": "#ffffff"}})
-                worksheet.insert_chart(chart_row, 0, chart, bar_chart_scale)
+                chart.set_size(bar_chart_box)
+                worksheet.insert_chart(chart_row, 0, chart)
             else:
                 worksheet.write(table_row, 0, "데이터 없음")
 
@@ -320,7 +334,8 @@ def _build_excel_report_bytes(
                         }
                     )
 
-                worksheet.insert_chart(chart2_row, 0, chart2, line_chart_scale)
+                chart2.set_size(line_chart_box)
+                worksheet.insert_chart(chart2_row, 0, chart2)
 
             if isinstance(daily_table, pd.DataFrame) and len(daily_table) > 0:
                 _df_to_sheet(writer, sheet_name=sheet_name, df=daily_table, startrow=table2_row, startcol=col0)
