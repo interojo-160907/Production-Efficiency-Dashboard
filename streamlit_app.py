@@ -246,47 +246,45 @@ def _build_excel_report_bytes(
             if desc:
                 worksheet.write(2, 0, f"설명: {desc}")
 
-            # ---- KPI cards (above freeze pane) ----
-            # Place in rows 2~4 (1-based) so charts starting at row 6 aren't affected.
+            # ---- KPI summary (no merges; stable grid) ----
             kpi_total_prod = payload.get("kpi_total_prod")
             kpi_spec_rate = payload.get("kpi_spec_rate")
             kpi_valid = payload.get("kpi_valid")
             kpi_over = payload.get("kpi_over")
             kpi_waste = payload.get("kpi_waste")
 
-            fmt_kpi_box = workbook.add_format(
-                {
-                    "bg_color": "#f3f6fb",
-                    "border": 1,
-                    "border_color": "#e5e7eb",
-                }
-            )
+            fmt_kpi_box = workbook.add_format({"bg_color": "#f3f6fb", "border": 1, "border_color": "#e5e7eb"})
             fmt_kpi_label = workbook.add_format({"font_name": chart_font, "font_size": 11, "bold": True, "color": "#111827"})
             fmt_kpi_value = workbook.add_format({"font_name": chart_font, "font_size": 22, "bold": True, "color": "#111827"})
             fmt_kpi_sub = workbook.add_format({"font_name": chart_font, "font_size": 10, "color": "#6b7280"})
 
-            def _write_card(r1, c1, r2, c2, label: str, value: str, sub: str | None = None, value_color: str | None = None):
-                worksheet.merge_range(r1, c1, r2, c2, "", fmt_kpi_box)
-                worksheet.write(r1, c1, label, fmt_kpi_label)
-                vfmt = fmt_kpi_value if value_color is None else workbook.add_format({"font_name": chart_font, "font_size": 22, "bold": True, "color": value_color})
-                worksheet.write(r1 + 1, c1, value, vfmt)
+            def _fill_box(r1: int, c1: int, r2: int, c2: int) -> None:
+                for rr in range(r1, r2 + 1):
+                    for cc in range(c1, c2 + 1):
+                        worksheet.write_blank(rr, cc, None, fmt_kpi_box)
+
+            def _write_kpi(slot_col: int, label: str, value: str, sub: str | None, color: str | None) -> None:
+                vfmt = fmt_kpi_value if color is None else workbook.add_format({"font_name": chart_font, "font_size": 22, "bold": True, "color": color})
+                worksheet.write(1, slot_col, label, fmt_kpi_label)
+                worksheet.write(2, slot_col, value, vfmt)
                 if sub:
-                    worksheet.write(r1 + 2, c1, sub, fmt_kpi_sub)
+                    worksheet.write(3, slot_col, sub, fmt_kpi_sub)
 
-            # Row/col positions (0-based): five cards across A..T (20 cols)
-            # A2:D4, E2:H4, I2:L4, M2:P4, Q2:T4
+            # Slots: 4 columns each across A..T (no merge)
+            slots = [(0, 3), (4, 7), (8, 11), (12, 15), (16, 19)]
+            for c1, c2 in slots:
+                _fill_box(1, c1, 3, c2)
+
             if kpi_total_prod is not None:
-                _write_card(1, 0, 3, 3, "총 생산량 (pcs)", f"{int(kpi_total_prod):,}")
+                _write_kpi(0, "총 생산량 (pcs)", f"{int(kpi_total_prod):,}", None, None)
             if kpi_spec_rate is not None:
-                _write_card(1, 4, 3, 7, "규격 대응률 (%)", f"{float(kpi_spec_rate):.1f}%", "일자별(필요SKU∩생산SKU) / 생산SKU", value_color="#1d4ed8")
-
-            # Metric-specific cards (use consistent slot ordering)
+                _write_kpi(4, "규격 대응률 (%)", f"{float(kpi_spec_rate):.1f}%", "일자별(필요SKU∩생산SKU) / 생산SKU", "#1d4ed8")
             if kpi_valid is not None:
-                _write_card(1, 8, 3, 11, "정확 대응 비중", f"{float(kpi_valid[0]):.1f}%", f"수량: {int(kpi_valid[1]):,} pcs", value_color="#047857")
+                _write_kpi(8, "정확 대응 비중", f"{float(kpi_valid[0]):.1f}%", f"수량: {int(kpi_valid[1]):,} pcs", "#047857")
             if kpi_over is not None:
-                _write_card(1, 12, 3, 15, "초과 생산 비중", f"{float(kpi_over[0]):.1f}%", f"수량: {int(kpi_over[1]):,} pcs", value_color="#b91c1c")
+                _write_kpi(12, "초과 생산 비중", f"{float(kpi_over[0]):.1f}%", f"수량: {int(kpi_over[1]):,} pcs", "#b91c1c")
             if kpi_waste is not None:
-                _write_card(1, 16, 3, 19, "비정형 생산 비중", f"{float(kpi_waste[0]):.1f}%", f"수량: {int(kpi_waste[1]):,} pcs", value_color="#b45309")
+                _write_kpi(16, "비정형 생산 비중", f"{float(kpi_waste[0]):.1f}%", f"수량: {int(kpi_waste[1]):,} pcs", "#b45309")
 
             # ---- Section 1: Factory bar chart + table ----
             worksheet.write(sec1_top, 0, "선택지표 (공장 비교)", fmt_section)
