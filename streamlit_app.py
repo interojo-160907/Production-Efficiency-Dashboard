@@ -167,7 +167,9 @@ def _build_excel_report_bytes(
             sec2_chart_row_min = 33  # row 34: line chart (match 규격대응률 sheet)
             sec2_table_row_min = 50  # row 51: table header row (chart above)
 
-            chart_size = {"width": 1440, "height": 720}  # ~15in x 7.5in
+            # Chart sizing: keep height stable (avoid covering tables) and only widen as needed.
+            bar_chart_scale = {"x_scale": 1.45, "y_scale": 1.0}
+            line_chart_scale = {"x_scale": 1.65, "y_scale": 1.0}
             chart_gap_after_table = 6
 
             now_txt = datetime.now(ZoneInfo(tz_name)).strftime("%Y-%m-%d %H:%M")
@@ -244,8 +246,7 @@ def _build_excel_report_bytes(
                 chart.set_style(10)
                 chart.set_plotarea({"border": {"none": True}, "fill": {"color": "#ffffff"}})
                 chart.set_chartarea({"border": {"none": True}, "fill": {"color": "#ffffff"}})
-                chart.set_size(chart_size)
-                worksheet.insert_chart(chart_row, 0, chart)
+                worksheet.insert_chart(chart_row, 0, chart, bar_chart_scale)
             else:
                 worksheet.write(table_row, 0, "데이터 없음")
 
@@ -319,8 +320,7 @@ def _build_excel_report_bytes(
                         }
                     )
 
-                chart2.set_size(chart_size)
-                worksheet.insert_chart(chart2_row, 0, chart2)
+                worksheet.insert_chart(chart2_row, 0, chart2, line_chart_scale)
 
             if isinstance(daily_table, pd.DataFrame) and len(daily_table) > 0:
                 _df_to_sheet(writer, sheet_name=sheet_name, df=daily_table, startrow=table2_row, startcol=col0)
