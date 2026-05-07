@@ -35,6 +35,47 @@ def _df_to_sheet(
     return first_row, last_row, first_col, last_col
 
 
+def _apply_table_formats(workbook, worksheet, *, df: pd.DataFrame, startrow: int, startcol: int) -> None:
+    fmt_int = workbook.add_format({"num_format": "#,##0"})
+    fmt_pct = workbook.add_format({"num_format": "0.0\"%\""})
+    fmt_date = workbook.add_format({"num_format": "yyyy-mm-dd"})
+
+    for idx, col in enumerate(df.columns):
+        c = startcol + idx
+        name = str(col)
+        width = 14
+        fmt = None
+
+        if name in {"날짜", "기간"}:
+            width = 12
+            fmt = fmt_date
+        elif "(pcs)" in name or name in {"총실적", "유효생산량", "과생산량", "불필요생산량", "총부족수량"}:
+            width = 16
+            fmt = fmt_int
+        elif "(%)" in name:
+            width = 14
+            fmt = fmt_pct
+        else:
+            width = 16 if len(name) <= 10 else 20
+
+        worksheet.set_column(c, c, width, fmt)
+
+
+def _write_chart_source_df(
+    writer: pd.ExcelWriter,
+    data_sheet_name: str,
+    *,
+    df: pd.DataFrame,
+    startrow: int,
+    startcol: int,
+) -> tuple[int, int, int, int]:
+    # Ensure datetime column stays datetime for Excel axis formatting.
+    df2 = df.copy()
+    if len(df2.columns) > 0 and str(df2.columns[0]) in {"기간", "날짜"}:
+        df2[df2.columns[0]] = pd.to_datetime(df2[df2.columns[0]], errors="coerce")
+    return _df_to_sheet(writer, sheet_name=data_sheet_name, df=df2, startrow=startrow, startcol=startcol)
+
+
 def _build_excel_report_bytes(
     *,
     metric_order: list[str],
@@ -53,6 +94,13 @@ def _build_excel_report_bytes(
         fmt_note = workbook.add_format({"font_size": 10, "font_color": "#6b7280"})
         fmt_header_bg = workbook.add_format({"bold": True, "bg_color": "#f3f4f6", "border": 1})
 
+        # Hidden data sheet to avoid polluting report layout (no more M column spillover)
+        data_sheet_name = "_DATA"
+        data_ws = workbook.add_worksheet(data_sheet_name)
+        data_ws.hide()
+        writer.sheets[data_sheet_name] = data_ws
+        data_next_row = 0
+
         for metric in metric_order:
             sheet_name = _safe_sheet_name(metric_sheet_map.get(metric, metric))
             payload = export_payload.get(metric, {})
@@ -64,10 +112,19 @@ def _build_excel_report_bytes(
             worksheet = workbook.add_worksheet(sheet_name)
             writer.sheets[sheet_name] = worksheet
 
-            # Layout (0-based): chart first, then table below (never overlap).
-            chart_height_rows = 18
+            # Layout (0-based): match requested template (chart on top, table starts at fixed rows)
             col0 = 0
-            hidden_col = 12  # column M for chart source data
+            sec1_top = 4          # row 5 (1-based): "선택지표 (공장 비교)"
+            sec1_chart_row = 5    # row 6: chart
+            sec1_table_row = 23   # row 24: table header row
+
+            sec2_top_min = 31     # row 32: "일별요약"
+            sec2_chart_row_min = 32
+            sec2_table_row_min = 50  # row 51: table header row (chart above)
+
+            chart_x_scale = 1.35
+            chart_y_scale = 1.15
+            chart_gap_after_table = 6
 
             now_txt = datetime.now(ZoneInfo(tz_name)).strftime("%Y-%m-%d %H:%M")
             title = f"{metric} 리포트 ({start_date_str} ~ {end_date_str})  생성: {now_txt}"
@@ -78,19 +135,15 @@ def _build_excel_report_bytes(
                 worksheet.write(2, 0, f"설명: {desc}")
 
             # ---- Section 1: Factory bar chart + table ----
-            sec1_top = 4
             worksheet.write(sec1_top, 0, "선택지표 (공장 비교)", fmt_section)
-
-            chart_row = sec1_top + 1
-            table_row = chart_row + chart_height_rows + 1
-
+            chart_row = sec1_chart_row
+            table_row = sec1_table_row
             if isinstance(factory_table, pd.DataFrame) and len(factory_table) > 0:
-                # Write table below chart
+                # Write table at fixed row for reporting
                 _df_to_sheet(writer, sheet_name=sheet_name, df=factory_table, startrow=table_row, startcol=col0)
+                _apply_table_formats(workbook, worksheet, df=factory_table, startrow=table_row, startcol=col0)
 
                 # Build bar chart from table range
-                first_row = table_row
-                header_row = table_row
                 data_first_row = table_row + 1
                 data_last_row = table_row + len(factory_table)
 
@@ -109,7 +162,11 @@ def _build_excel_report_bytes(
                         "categories": categories,
                         "values": values,
                         "data_labels": {"value": True, "num_format": "0.0\"%\""},
-                        "fill": {"color": "#2563eb"},
+                        "points": [
+                            {"fill": {"color": "#0b63ce"}},  # A관
+                            {"fill": {"color": "#8fd0ff"}},  # C관
+                            {"fill": {"color": "#ff2b2b"}},  # S관
+                        ],
                         "border": {"none": True},
                     }
                 )
@@ -117,16 +174,18 @@ def _build_excel_report_bytes(
                 chart.set_y_axis({"name": "%", "min": 0, "max": 100, "major_gridlines": {"visible": True}})
                 chart.set_legend({"none": True})
                 chart.set_style(10)
-                worksheet.insert_chart(chart_row, 0, chart, {"x_scale": 1.5, "y_scale": 1.2})
+                chart.set_plotarea({"border": {"none": True}})
+                chart.set_chartarea({"border": {"none": True}})
+                worksheet.insert_chart(chart_row, 0, chart, {"x_scale": chart_x_scale, "y_scale": chart_y_scale})
             else:
                 worksheet.write(table_row, 0, "데이터 없음")
 
             # ---- Section 2: Daily line chart + table ----
-            sec2_top = table_row + (len(factory_table) + 4 if isinstance(factory_table, pd.DataFrame) else 8)
+            sec2_top = max(sec2_top_min, table_row + (len(factory_table) + chart_gap_after_table if isinstance(factory_table, pd.DataFrame) else 12))
             worksheet.write(sec2_top, 0, "일별요약", fmt_section)
 
-            chart2_row = sec2_top + 1
-            table2_row = chart2_row + chart_height_rows + 1
+            chart2_row = max(sec2_chart_row_min, sec2_top + 1)
+            table2_row = max(sec2_table_row_min, chart2_row + 18)
 
             line_ts_df = payload.get("line_ts_df")
             if isinstance(line_ts_df, pd.DataFrame) and len(line_ts_df) > 0:
@@ -135,47 +194,52 @@ def _build_excel_report_bytes(
                 tmp["기간"] = pd.to_datetime(tmp["기간"], errors="coerce")
                 tmp = tmp.dropna(subset=["기간"])
                 wide = tmp.pivot_table(index="기간", columns="공장", values="값", aggfunc="mean").reset_index()
-
-                # Put chart source at hidden_col
-                src_row = chart2_row
-                src_col = hidden_col
-                _df_to_sheet(writer, sheet_name=sheet_name, df=wide, startrow=src_row, startcol=src_col)
-                worksheet.set_column(src_col, src_col + max(len(wide.columns) - 1, 0), 2, None, {"hidden": True})
-
+                # Put chart source into hidden _DATA sheet
+                src_row = data_next_row
+                src_col = 0
+                _write_chart_source_df(writer, data_sheet_name, df=wide, startrow=src_row, startcol=src_col)
                 date_col = src_col
                 date_first = src_row + 1
                 date_last = src_row + len(wide)
+                data_next_row = date_last + 3
 
                 chart2 = workbook.add_chart({"type": "line"})
                 chart2.set_title({"name": f"공장별 {metric} 추이"})
                 chart2.set_y_axis({"name": "%", "min": 0, "max": 100, "major_gridlines": {"visible": True}})
                 chart2.set_legend({"position": "top"})
                 chart2.set_style(10)
+                chart2.set_x_axis({"num_format": "yyyy-mm-dd"})
+                chart2.set_plotarea({"border": {"none": True}})
+                chart2.set_chartarea({"border": {"none": True}})
+
+                series_colors = ["#0b63ce", "#8fd0ff", "#ff2b2b"]
 
                 for j, col_name in enumerate(wide.columns[1:], start=1):
                     val_c = src_col + j
                     chart2.add_series(
                         {
                             "name": str(col_name),
-                            "categories": f"='{sheet_name}'!{xl_rowcol_to_cell(date_first, date_col)}:{xl_rowcol_to_cell(date_last, date_col)}",
-                            "values": f"='{sheet_name}'!{xl_rowcol_to_cell(date_first, val_c)}:{xl_rowcol_to_cell(date_last, val_c)}",
-                            "line": {"width": 2.0},
+                            "categories": f"='{data_sheet_name}'!{xl_rowcol_to_cell(date_first, date_col)}:{xl_rowcol_to_cell(date_last, date_col)}",
+                            "values": f"='{data_sheet_name}'!{xl_rowcol_to_cell(date_first, val_c)}:{xl_rowcol_to_cell(date_last, val_c)}",
+                            "line": {"width": 2.25, "color": series_colors[(j - 1) % len(series_colors)]},
                         }
                     )
 
-                worksheet.insert_chart(chart2_row, 0, chart2, {"x_scale": 1.5, "y_scale": 1.2})
+                worksheet.insert_chart(chart2_row, 0, chart2, {"x_scale": chart_x_scale, "y_scale": chart_y_scale})
 
             if isinstance(daily_table, pd.DataFrame) and len(daily_table) > 0:
                 _df_to_sheet(writer, sheet_name=sheet_name, df=daily_table, startrow=table2_row, startcol=col0)
+                _apply_table_formats(workbook, worksheet, df=daily_table, startrow=table2_row, startcol=col0)
             else:
                 worksheet.write(table2_row, 0, "데이터 없음")
 
             # ---- Section 3: Factory daily detail table ----
-            sec3_top = table2_row + (len(daily_table) + 4 if isinstance(daily_table, pd.DataFrame) else 8)
+            sec3_top = table2_row + (len(daily_table) + 6 if isinstance(daily_table, pd.DataFrame) else 14)
             worksheet.write(sec3_top, 0, "관별(공장별) 일별상세", fmt_section)
             table3_row = sec3_top + 1
             if isinstance(factory_daily_table, pd.DataFrame) and len(factory_daily_table) > 0:
                 _df_to_sheet(writer, sheet_name=sheet_name, df=factory_daily_table, startrow=table3_row, startcol=col0)
+                _apply_table_formats(workbook, worksheet, df=factory_daily_table, startrow=table3_row, startcol=col0)
             else:
                 worksheet.write(table3_row, 0, "데이터 없음")
 
