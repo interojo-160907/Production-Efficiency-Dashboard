@@ -10,6 +10,10 @@ import plotly.graph_objects as go
 import plotly.express as px
 import io
 import matplotlib.pyplot as plt
+from matplotlib import rcParams
+
+rcParams["font.family"] = "Malgun Gothic"
+rcParams["axes.unicode_minus"] = False
 
 
 def _safe_sheet_name(name: str) -> str:
@@ -21,7 +25,7 @@ def _safe_sheet_name(name: str) -> str:
 
 def _mpl_to_png_bytes(fig) -> bytes:
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=200, bbox_inches="tight")
+    fig.savefig(buf, format="png", dpi=220, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     buf.seek(0)
     return buf.getvalue()
@@ -36,12 +40,13 @@ def _bar_png_from_factory_table(factory_table: pd.DataFrame, metric: str) -> byt
     x = factory_table["공장"].astype(str).tolist()
     y = pd.to_numeric(factory_table["선택지표"], errors="coerce").fillna(0).tolist()
 
-    fig, ax = plt.subplots(figsize=(8.5, 3.2))
-    bars = ax.bar(x, y, color="#3b82f6")
+    fig, ax = plt.subplots(figsize=(10.5, 3.8))
+    bars = ax.bar(x, y, color=["#2563eb", "#f97316", "#16a34a"][: len(x)])
     ax.set_ylim(0, 105)
-    ax.set_title(f"공장별 {metric} (%)")
+    ax.set_title(f"공장별 {metric} (%)", pad=10)
     ax.set_ylabel("%")
     ax.grid(axis="y", alpha=0.25)
+    ax.tick_params(axis="x", labelrotation=0)
     for b, v in zip(bars, y, strict=False):
         ax.text(b.get_x() + b.get_width() / 2, min(v + 1, 104), f"{v:.1f}%", ha="center", va="bottom", fontsize=9)
 
@@ -61,13 +66,13 @@ def _line_png_from_ts_df(ts_df: pd.DataFrame, metric: str) -> bytes | None:
     if len(df) == 0:
         return None
 
-    fig, ax = plt.subplots(figsize=(8.5, 3.2))
+    fig, ax = plt.subplots(figsize=(10.5, 3.8))
     for factory, g in df.groupby("공장", sort=False):
         g = g.sort_values("기간")
         ax.plot(g["기간"], g["값"], linewidth=2.0, label=str(factory))
 
     ax.set_ylim(0, 105)
-    ax.set_title(f"공장별 {metric} 추이")
+    ax.set_title(f"공장별 {metric} 추이", pad=10)
     ax.set_ylabel("%")
     ax.grid(alpha=0.25)
     ax.legend(loc="upper left", ncols=3, fontsize=8, frameon=False)
@@ -127,7 +132,7 @@ def _build_excel_report_bytes(
 
             bar_png = _bar_png_from_factory_table(factory_table, metric)
             if bar_png:
-                worksheet.insert_image(start_row, 6, "bar.png", {"image_data": io.BytesIO(bar_png)})
+                worksheet.insert_image(start_row, 6, "bar.png", {"image_data": io.BytesIO(bar_png), "x_scale": 0.95, "y_scale": 0.95})
 
             start_row += table_rows + 3
 
@@ -142,7 +147,7 @@ def _build_excel_report_bytes(
 
             line_png = _line_png_from_ts_df(payload.get("line_ts_df"), metric)
             if line_png:
-                worksheet.insert_image(start_row, 6, "line.png", {"image_data": io.BytesIO(line_png)})
+                worksheet.insert_image(start_row, 6, "line.png", {"image_data": io.BytesIO(line_png), "x_scale": 0.95, "y_scale": 0.95})
 
             start_row += daily_rows + 3
 
