@@ -153,13 +153,9 @@ def _build_excel_report_bytes(
 
         # Hidden data sheet for chart source ranges (Excel charts must reference cells on a worksheet).
         # Keep it hidden so the report sheets remain clean.
+        # Create DATA sheet last (so the workbook opens on the first report sheet).
         data_sheet_name = "DATA"
-        data_ws = workbook.add_worksheet(data_sheet_name)
-        try:
-            data_ws.very_hidden()
-        except Exception:
-            data_ws.hide()
-        writer.sheets[data_sheet_name] = data_ws
+        data_ws = None
         data_next_row = 0
 
         chart_font = "Malgun Gothic"
@@ -414,6 +410,13 @@ def _build_excel_report_bytes(
                 # Put chart source into hidden _DATA sheet
                 src_row = data_next_row
                 src_col = 0
+                if data_ws is None:
+                    data_ws = workbook.add_worksheet(data_sheet_name)
+                    try:
+                        data_ws.very_hidden()
+                    except Exception:
+                        data_ws.hide()
+                    writer.sheets[data_sheet_name] = data_ws
                 _write_chart_source_df(writer, data_sheet_name, df=wide, startrow=src_row, startcol=src_col)
                 date_col = src_col
                 date_first = src_row + 1
