@@ -1,5 +1,7 @@
 streamlit
 pandas
 openpyxl
+XlsxWriter
 plotly
+kaleido
 numpy

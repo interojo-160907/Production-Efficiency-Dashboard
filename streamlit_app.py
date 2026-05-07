@@ -8,6 +8,285 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
+import io
+import plotly.io as pio
+
+
+def _safe_sheet_name(name: str) -> str:
+    name = str(name).strip().replace("/", "_").replace("\\", "_").replace(":", "_")
+    if not name:
+        name = "Sheet"
+    return name[:31]
+
+
+def _plotly_to_png_bytes(fig) -> bytes | None:
+    try:
+        return pio.to_image(fig, format="png", scale=2)
+    except Exception:
+        return None
+
+
+def _build_excel_report_bytes(
+    *,
+    metric_order: list[str],
+    metric_sheet_map: dict[str, str],
+    metric_desc: dict[str, str],
+    export_payload: dict[str, dict[str, object]],
+    start_date_str: str,
+    end_date_str: str,
+    tz_name: str,
+) -> bytes:
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        workbook = writer.book
+        fmt_title = workbook.add_format({"bold": True, "font_size": 14})
+        fmt_section = workbook.add_format({"bold": True, "font_size": 12})
+
+        for metric in metric_order:
+            sheet_name = _safe_sheet_name(metric_sheet_map.get(metric, metric))
+            payload = export_payload.get(metric, {})
+
+            factory_table = payload.get("factory_table")
+            daily_table = payload.get("daily_table")
+            factory_daily_table = payload.get("factory_daily_table")
+            bar_fig = payload.get("bar_fig")
+            line_fig = payload.get("line_fig")
+
+            start_row = 0
+            worksheet = workbook.add_worksheet(sheet_name)
+            writer.sheets[sheet_name] = worksheet
+
+            now_txt = datetime.now(ZoneInfo(tz_name)).strftime("%Y-%m-%d %H:%M")
+            title = f"{metric} 리포트 ({start_date_str} ~ {end_date_str})  생성: {now_txt}"
+            worksheet.write(start_row, 0, title, fmt_title)
+            start_row += 2
+
+            desc = metric_desc.get(metric)
+            if desc:
+                worksheet.write(start_row, 0, f"설명: {desc}")
+                start_row += 2
+
+            worksheet.write(start_row, 0, "선택지표 (공장 비교)", fmt_section)
+            start_row += 1
+            if isinstance(factory_table, pd.DataFrame) and len(factory_table) > 0:
+                factory_table.to_excel(writer, sheet_name=sheet_name, index=False, startrow=start_row, startcol=0)
+                table_rows = len(factory_table) + 1
+            else:
+                worksheet.write(start_row, 0, "데이터 없음")
+                table_rows = 1
+
+            bar_png = _plotly_to_png_bytes(bar_fig) if bar_fig is not None else None
+            if bar_png:
+                worksheet.insert_image(start_row, 6, "bar.png", {"image_data": io.BytesIO(bar_png)})
+
+            start_row += table_rows + 3
+
+            worksheet.write(start_row, 0, "일별요약", fmt_section)
+            start_row += 1
+            if isinstance(daily_table, pd.DataFrame) and len(daily_table) > 0:
+                daily_table.to_excel(writer, sheet_name=sheet_name, index=False, startrow=start_row, startcol=0)
+                daily_rows = len(daily_table) + 1
+            else:
+                worksheet.write(start_row, 0, "데이터 없음")
+                daily_rows = 1
+
+            line_png = _plotly_to_png_bytes(line_fig) if line_fig is not None else None
+            if line_png:
+                worksheet.insert_image(start_row, 6, "line.png", {"image_data": io.BytesIO(line_png)})
+
+            start_row += daily_rows + 3
+
+            worksheet.write(start_row, 0, "관별(공장별) 일별상세", fmt_section)
+            start_row += 1
+            if isinstance(factory_daily_table, pd.DataFrame) and len(factory_daily_table) > 0:
+                factory_daily_table.to_excel(writer, sheet_name=sheet_name, index=False, startrow=start_row, startcol=0)
+            else:
+                worksheet.write(start_row, 0, "데이터 없음")
+
+            worksheet.freeze_panes(1, 0)
+            worksheet.set_column(0, 0, 14)
+            worksheet.set_column(1, 1, 16)
+            worksheet.set_column(2, 20, 18)
+
+    output.seek(0)
+    return output.getvalue()
+
+
+def _build_factory_bar_fig(*, factory_data: pd.DataFrame, metric_option: str) -> tuple[pd.DataFrame, go.Figure | None]:
+    metric_map = {
+        "규격 대응률": ("규격대응률(%)", "유효생산량"),
+        "정확 대응 비중": ("유효비율(%)", "유효생산량"),
+        "초과 생산 비중": ("과생산비율(%)", "과생산량"),
+        "비정형 생산 비중": ("불필요비율(%)", "불필요생산량"),
+    }
+    metric_col, pcs_col = metric_map[metric_option]
+
+    df = factory_data.copy()
+    if metric_col not in df.columns:
+        df[metric_col] = np.nan
+    df["선택지표"] = pd.to_numeric(df[metric_col], errors="coerce").replace([np.inf, -np.inf], 0).fillna(0).clip(0, 100)
+
+    hover_data = {
+        "총실적": ":,",
+        "유효생산량": ":,",
+        "과생산량": ":,",
+        "불필요생산량": ":,",
+        "생산SKU수": ":,",
+        "필요대응SKU수": ":,",
+        "규격대응률(%)": ":.1f",
+        "유효비율(%)": ":.1f",
+        "과생산비율(%)": ":.1f",
+        "불필요비율(%)": ":.1f",
+        "선택지표": ":.1f",
+    }
+    hover_data = {k: v for k, v in hover_data.items() if k in df.columns}
+
+    fig = px.bar(
+        df,
+        x="공장",
+        y="선택지표",
+        color="공장",
+        title=f"공장별 {metric_option} (%)",
+        text="선택지표",
+        hover_data=hover_data,
+    )
+    fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside", cliponaxis=False)
+    fig.update_layout(height=420, showlegend=False, margin=dict(l=0, r=0, t=60, b=0), yaxis=dict(range=[0, 105]))
+
+    table_cols = ["공장", "총실적", pcs_col, metric_col, "선택지표"]
+    table_cols = [c for c in table_cols if c in df.columns]
+    return df[table_cols].copy(), fig
+
+
+def _build_factory_line_fig(
+    *,
+    metric_option: str,
+    factory_summary_filtered: pd.DataFrame,
+    sku_daily_factory: pd.DataFrame | None,
+    sku_daily_all: pd.DataFrame | None,
+    start_date,
+    end_date,
+    today,
+) -> go.Figure | None:
+    if factory_summary_filtered is None or len(factory_summary_filtered) == 0:
+        return None
+
+    display_start_date = start_date
+    display_end_date = end_date
+
+    span_days = (display_end_date - display_start_date).days + 1
+    if span_days <= 30:
+        bucket = "D"
+    elif span_days <= 210:
+        bucket = "W"
+    else:
+        bucket = "M"
+
+    axis = _build_axis(display_start_date, display_end_date, bucket)
+    tickvals, ticktext = _build_tick_labels(axis, bucket)
+
+    factories = [f for f in factory_summary_filtered["공장"].dropna().astype(str).unique().tolist()]
+    if not factories:
+        return None
+
+    ts_rows: list[dict] = []
+    if metric_option != "규격 대응률":
+        base_ts = factory_summary_filtered[
+            ["생산일자_date", "공장", "총실적", "유효생산량", "과생산량", "불필요생산량"]
+        ].copy()
+        base_ts["date"] = pd.to_datetime(base_ts["생산일자_date"], errors="coerce")
+        base_ts = base_ts.dropna(subset=["date"])
+        base_ts["period"] = _period_start(base_ts["date"], bucket)
+        agg = base_ts.groupby(["period", "공장"], dropna=False).agg(
+            total=("총실적", "sum"),
+            valid=("유효생산량", "sum"),
+            over=("과생산량", "sum"),
+            waste=("불필요생산량", "sum"),
+        ).reset_index()
+
+        num_col = {
+            "정확 대응 비중": "valid",
+            "초과 생산 비중": "over",
+            "비정형 생산 비중": "waste",
+        }[metric_option]
+        agg["value"] = np.where(agg["total"] > 0, agg[num_col] / agg["total"] * 100, np.nan)
+        agg["value"] = pd.to_numeric(agg["value"], errors="coerce").clip(0, 100)
+
+        for _, r in agg.iterrows():
+            ts_rows.append({"기간": r["period"], "공장": r["공장"], "값": r["value"]})
+    else:
+        spec_done = False
+        required_cols_ts = {"날짜_date", "공장", "생산SKU수", "필요대응SKU수"}
+        if sku_daily_factory is not None and len(sku_daily_factory) > 0 and required_cols_ts.issubset(set(sku_daily_factory.columns)):
+            day_counts_ts = sku_daily_factory[
+                (sku_daily_factory["날짜_date"] >= start_date) &
+                (sku_daily_factory["날짜_date"] <= end_date) &
+                (sku_daily_factory["날짜_date"] != today)
+            ].copy()
+            if len(day_counts_ts) > 0:
+                day_counts_ts["date"] = pd.to_datetime(day_counts_ts["날짜_date"], errors="coerce")
+                day_counts_ts = day_counts_ts.dropna(subset=["date"])
+                day_counts_ts["period"] = _period_start(day_counts_ts["date"], bucket)
+                agg_ts = day_counts_ts.groupby(["period", "공장"], dropna=False)[["생산SKU수", "필요대응SKU수"]].sum().reset_index()
+                agg_ts["value"] = np.where(
+                    agg_ts["생산SKU수"] > 0,
+                    agg_ts["필요대응SKU수"] / agg_ts["생산SKU수"] * 100,
+                    np.nan,
+                )
+                agg_ts["value"] = pd.to_numeric(agg_ts["value"], errors="coerce").clip(0, 100)
+                for _, r in agg_ts.iterrows():
+                    ts_rows.append({"기간": r["period"], "공장": r["공장"], "값": r["value"]})
+                spec_done = True
+
+        if (not spec_done) and (sku_daily_all is not None) and (len(sku_daily_all) > 0) and {"날짜_date", "생산SKU수", "필요대응SKU수"}.issubset(set(sku_daily_all.columns)):
+            daily_spec = sku_daily_all[
+                (sku_daily_all["날짜_date"] >= start_date) &
+                (sku_daily_all["날짜_date"] <= end_date) &
+                (sku_daily_all["날짜_date"] != today)
+            ].copy()
+            if len(daily_spec) > 0:
+                daily_spec["date"] = pd.to_datetime(daily_spec["날짜_date"], errors="coerce")
+                daily_spec = daily_spec.dropna(subset=["date"])
+                daily_spec["period"] = _period_start(daily_spec["date"], bucket)
+                agg_spec = daily_spec.groupby(["period"], dropna=False)[["생산SKU수", "필요대응SKU수"]].sum().reset_index()
+                agg_spec["value"] = np.where(
+                    agg_spec["생산SKU수"] > 0,
+                    agg_spec["필요대응SKU수"] / agg_spec["생산SKU수"] * 100,
+                    np.nan,
+                )
+                agg_spec["value"] = pd.to_numeric(agg_spec["value"], errors="coerce").clip(0, 100)
+                for _, r in agg_spec.iterrows():
+                    for f in factories:
+                        ts_rows.append({"기간": r["period"], "공장": f, "값": r["value"]})
+
+    ts_df = pd.DataFrame(ts_rows)
+    if len(ts_df) == 0:
+        return None
+
+    ts_df["기간"] = pd.to_datetime(ts_df["기간"], errors="coerce")
+    full_grid = pd.MultiIndex.from_product([axis, factories], names=["기간", "공장"]).to_frame(index=False)
+    ts_df = full_grid.merge(ts_df, on=["기간", "공장"], how="left")
+    label_map = {pd.Timestamp(v): t for v, t in zip(tickvals, ticktext, strict=False)}
+    ts_df["x_label"] = ts_df["기간"].map(label_map)
+
+    line_fig = px.line(
+        ts_df,
+        x="기간",
+        y="값",
+        color="공장",
+        title=f"공장별 {metric_option} 추이",
+        markers=False,
+        custom_data=["x_label"],
+    )
+    line_fig.update_traces(line=dict(width=3.5), hovertemplate="공장=%{legendgroup}<br>기간=%{customdata[0]}<br>값=%{y:.1f}%<extra></extra>")
+    line_fig.update_layout(
+        height=320,
+        margin=dict(l=0, r=0, t=60, b=0),
+        yaxis=dict(range=[0, 105], title=f"{metric_option} (%)", tickformat=".1f"),
+        xaxis=dict(tickmode="array", tickvals=tickvals, ticktext=ticktext, tickangle=-45, tickfont=dict(size=10)),
+        legend_title_text="공장",
+    )
+    return line_fig
 
 
 def _month_end(d: datetime.date) -> datetime.date:
@@ -1249,6 +1528,118 @@ try:
                 use_container_width=True,
                 hide_index=True,
             )
+
+    # ============== 자료 다운로드 ==============
+    st.markdown("### 📥 자료 다운로드")
+    if len(daily_summary_filtered) == 0:
+        st.info("선택한 기간에 다운로드할 데이터가 없습니다.")
+    else:
+        metric_order = ["규격 대응률", "정확 대응 비중", "초과 생산 비중", "비정형 생산 비중"]
+        metric_sheet_map = {
+            "규격 대응률": "규격대응률",
+            "정확 대응 비중": "정확대응비중",
+            "초과 생산 비중": "초과생산비중",
+            "비정형 생산 비중": "비정형생산비중",
+        }
+        metric_desc = {
+            "규격 대응률": "생산한 SKU(제품코드) 중 필요가 있었던 SKU 비중",
+            "정확 대응 비중": "총 생산량 중 정확 대응 생산량이 차지하는 비중",
+            "초과 생산 비중": "총 생산량 중 초과 생산량이 차지하는 비중",
+            "비정형 생산 비중": "총 생산량 중 비정형 생산량이 차지하는 비중",
+        }
+
+        rate_col_map = {
+            "규격 대응률": "규격 대응률(%)",
+            "정확 대응 비중": RATE_LABEL_MAP["유효비율(%)"],
+            "초과 생산 비중": RATE_LABEL_MAP["과생산비율(%)"],
+            "비정형 생산 비중": RATE_LABEL_MAP["불필요비율(%)"],
+        }
+        pcs_col_map = {
+            "규격 대응률": None,
+            "정확 대응 비중": f"{KPI_LABEL_MAP['유효생산량']} (pcs)",
+            "초과 생산 비중": f"{KPI_LABEL_MAP['과생산량']} (pcs)",
+            "비정형 생산 비중": f"{KPI_LABEL_MAP['불필요생산량']} (pcs)",
+        }
+
+        def _daily_table_for(metric: str) -> pd.DataFrame:
+            cols = [
+                "날짜",
+                f"{KPI_LABEL_MAP['총실적']} (pcs)",
+                f"{KPI_LABEL_MAP['총부족수량']} (pcs)",
+                rate_col_map.get(metric),
+                pcs_col_map.get(metric),
+            ]
+            cols = [c for c in cols if c and c in daily_display.columns]
+            return daily_display[cols].copy() if cols else pd.DataFrame()
+
+        def _factory_daily_table_for(metric: str) -> pd.DataFrame:
+            cols = [
+                "날짜",
+                "공장",
+                f"{KPI_LABEL_MAP['총실적']} (pcs)",
+                factory_need_label,
+                rate_col_map.get(metric),
+                pcs_col_map.get(metric),
+            ]
+            cols = [c for c in cols if c and c in factory_daily_display.columns]
+            return factory_daily_display[cols].copy() if cols else pd.DataFrame()
+
+        can_export = "factory_data" in locals() and isinstance(factory_data, pd.DataFrame) and len(factory_data) > 0
+        if not can_export:
+            st.info("공장별 데이터가 없어 다운로드 파일을 생성할 수 없습니다.")
+        else:
+            excel_key = "export_excel_bytes"
+            if st.button("엑셀 파일 생성", type="primary"):
+                with st.spinner("엑셀 생성 중... (차트 PNG 포함)"):
+                    try:
+                        export_payload: dict[str, dict[str, object]] = {}
+                        for metric in metric_order:
+                            factory_table, bar_fig = _build_factory_bar_fig(factory_data=factory_data, metric_option=metric)
+                            line_fig = _build_factory_line_fig(
+                                metric_option=metric,
+                                factory_summary_filtered=factory_summary_filtered,
+                                sku_daily_factory=sku_daily_factory,
+                                sku_daily_all=sku_daily_all,
+                                start_date=start_date,
+                                end_date=end_date,
+                                today=today,
+                            )
+                            export_payload[metric] = {
+                                "factory_table": factory_table,
+                                "daily_table": _daily_table_for(metric),
+                                "factory_daily_table": _factory_daily_table_for(metric) if "factory_daily_display" in locals() else pd.DataFrame(),
+                                "bar_fig": bar_fig,
+                                "line_fig": line_fig,
+                            }
+
+                        start_date_str = start_date.strftime("%Y-%m-%d")
+                        end_date_str = end_date.strftime("%Y-%m-%d")
+                        st.session_state[excel_key] = _build_excel_report_bytes(
+                            metric_order=metric_order,
+                            metric_sheet_map=metric_sheet_map,
+                            metric_desc=metric_desc,
+                            export_payload=export_payload,
+                            start_date_str=start_date_str,
+                            end_date_str=end_date_str,
+                            tz_name="Asia/Seoul",
+                        )
+                    except ModuleNotFoundError as e:
+                        st.error(f"엑셀 생성에 필요한 패키지가 없습니다: {e}. `pip install -r requirements.txt` 후 재시도해주세요.")
+                    except Exception as e:
+                        st.error(f"엑셀 생성 실패: {e}")
+
+            if excel_key in st.session_state and st.session_state[excel_key]:
+                start_date_str = start_date.strftime("%Y%m%d")
+                end_date_str = end_date.strftime("%Y%m%d")
+                filename = f"공장비교_리포트_{start_date_str}_{end_date_str}.xlsx"
+                st.download_button(
+                    "다운로드",
+                    data=st.session_state[excel_key],
+                    file_name=filename,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+                if _plotly_to_png_bytes(go.Figure()) is None:
+                    st.caption("※ 차트 PNG 삽입은 `kaleido` 설치가 필요합니다. (차트가 비어있으면 `pip install -r requirements.txt` 후 재실행)")
 
 except Exception as e:
     st.error(f"❌ 오류가 발생했습니다: {str(e)}")
