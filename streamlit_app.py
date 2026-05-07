@@ -2195,18 +2195,10 @@ try:
 
             # RAWDATA download (original result excel)
             st.markdown("")
-            st.caption("원본 결과 파일(`유효생산량_결과*.xlsx`) 다운로드")
+            st.caption("원본 결과 파일(`유효생산량_결과*.xlsx`) 다운로드 (가장 최신 파일)")
             raw_candidates = result_candidates if "result_candidates" in globals() else []
             if raw_candidates:
-                if len(raw_candidates) == 1:
-                    raw_path = raw_candidates[0]
-                else:
-                    raw_path = st.selectbox(
-                        "ROWDATA 파일 선택",
-                        options=raw_candidates,
-                        format_func=lambda p: f"{p.name} (수정: {datetime.fromtimestamp(p.stat().st_mtime).strftime('%Y-%m-%d %H:%M')})",
-                    )
-
+                raw_path = raw_candidates[0]  # newest (already sorted desc by mtime)
                 try:
                     raw_bytes = Path(raw_path).read_bytes()
                     st.download_button(
