@@ -95,6 +95,44 @@ def _write_chart_source_df(
     return _df_to_sheet(writer, sheet_name=data_sheet_name, df=df2, startrow=startrow, startcol=startcol)
 
 
+def _excel_col_width_to_pixels(width: float) -> int:
+    # XlsxWriter uses an Excel-like character width unit. Approximate conversion.
+    # See: Excel column width ≈ number of '0' characters. Typical pixel conversion:
+    # pixels = trunc(width * 7 + 5) for widths >= 1.
+    if width is None:
+        width = 8.43
+    if width <= 0:
+        return 0
+    return int(width * 7 + 5)
+
+
+def _excel_row_height_to_pixels(points: float) -> int:
+    # Excel row height is in points. 1 point = 1/72 inch. At 96 dpi => 96/72 = 1.333 px/pt.
+    if points is None:
+        points = 15.0
+    return int(points * 96.0 / 72.0)
+
+
+def _chart_box_pixels(
+    *,
+    col_widths: dict[int, float],
+    row_height_points: float,
+    first_col: int,
+    last_col: int,
+    first_row: int,
+    last_row: int,
+    pad_px: int = 8,
+) -> tuple[int, int]:
+    # rows/cols are 0-based inclusive.
+    width_px = 0
+    for c in range(first_col, last_col + 1):
+        width_px += _excel_col_width_to_pixels(col_widths.get(c))
+    height_px = _excel_row_height_to_pixels(row_height_points) * (last_row - first_row + 1)
+    width_px = max(200, width_px - pad_px)
+    height_px = max(160, height_px - pad_px)
+    return width_px, height_px
+
+
 def _build_excel_report_bytes(
     *,
     metric_order: list[str],
@@ -133,12 +171,7 @@ def _build_excel_report_bytes(
         # so approximate "50% transparency" with a lighter color.
         gridline_color = "#eef2f7"
 
-        # Chart boxes sized to fixed cell ranges:
-        # - Bar:  A6:G23  (7 cols wide, 18 rows tall)
-        # - Line: A34:T51 (20 cols wide, 18 rows tall)
-        # Width/height are in pixels for XlsxWriter.
-        bar_chart_box = {"width": 900, "height": 430}
-        line_chart_box = {"width": 1800, "height": 430}
+        # Chart boxes are computed per-sheet to fit target cell ranges.
 
         def _ymax_0_100(series_max: float | None) -> int:
             if series_max is None:
@@ -166,6 +199,10 @@ def _build_excel_report_bytes(
             worksheet = workbook.add_worksheet(sheet_name)
             writer.sheets[sheet_name] = worksheet
 
+            # Keep a deterministic row height so "cell-range sized" charts are consistent.
+            row_height_points = 15.0
+            worksheet.set_default_row(row_height_points)
+
             # Layout (0-based): match requested template (chart on top, table starts at fixed rows)
             col0 = 0
             sec1_top = 4          # row 5 (1-based): "선택지표 (공장 비교)"
@@ -180,6 +217,26 @@ def _build_excel_report_bytes(
             bar_chart_scale = {"x_scale": 1.45, "y_scale": 1.0}
             line_chart_scale = {"x_scale": 1.65, "y_scale": 1.0}
             chart_gap_after_table = 6
+
+            # Column widths (0-based col index) used for chart sizing.
+            # Keep these consistent with table readability.
+            col_widths: dict[int, float] = {
+                0: 12,  # A
+                1: 16,  # B
+                2: 16,  # C
+                3: 14,  # D
+                4: 14,  # E
+                5: 16,  # F
+                6: 13,  # G
+                7: 13,  # H
+                8: 13,  # I
+                9: 13,  # J
+                10: 13,  # K
+                11: 13,  # L
+                12: 2,  # M (unused on report sheets)
+            }
+            for c, w in col_widths.items():
+                worksheet.set_column(c, c, w)
 
             now_txt = datetime.now(ZoneInfo(tz_name)).strftime("%Y-%m-%d %H:%M")
             title = f"{metric} 리포트 ({start_date_str} ~ {end_date_str})  생성: {now_txt}"
@@ -259,7 +316,16 @@ def _build_excel_report_bytes(
                 chart.set_style(10)
                 chart.set_plotarea({"border": {"none": True}, "fill": {"color": "#ffffff"}})
                 chart.set_chartarea({"border": {"none": True}, "fill": {"color": "#ffffff"}})
-                chart.set_size(bar_chart_box)
+                # Fit chart into A6:G23 (1-based). 0-based rows 5..22, cols 0..6.
+                wpx, hpx = _chart_box_pixels(
+                    col_widths=col_widths,
+                    row_height_points=row_height_points,
+                    first_col=0,
+                    last_col=6,
+                    first_row=5,
+                    last_row=22,
+                )
+                chart.set_size({"width": wpx, "height": hpx})
                 worksheet.insert_chart(chart_row, 0, chart)
             else:
                 worksheet.write(table_row, 0, "데이터 없음")
@@ -334,7 +400,17 @@ def _build_excel_report_bytes(
                         }
                     )
 
-                chart2.set_size(line_chart_box)
+                # Fit chart into A34:T51 (1-based). 0-based rows 33..50, cols 0..19.
+                # Use default width for columns beyond our set; approximate at 8.43.
+                wpx, hpx = _chart_box_pixels(
+                    col_widths=col_widths,
+                    row_height_points=row_height_points,
+                    first_col=0,
+                    last_col=19,
+                    first_row=33,
+                    last_row=50,
+                )
+                chart2.set_size({"width": wpx, "height": hpx})
                 worksheet.insert_chart(chart2_row, 0, chart2)
 
             if isinstance(daily_table, pd.DataFrame) and len(daily_table) > 0:
