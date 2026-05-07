@@ -270,21 +270,22 @@ def _build_excel_report_bytes(
                 if sub:
                     worksheet.write(3, slot_col, sub, fmt_kpi_sub)
 
-            # Slots: 4 columns each across A..T (no merge)
-            slots = [(0, 3), (4, 7), (8, 11), (12, 15), (16, 19)]
+            # Slots: 2 columns each starting at A,C,E,G,I (no merge)
+            # A:B, C:D, E:F, G:H, I:J
+            slots = [(0, 1), (2, 3), (4, 5), (6, 7), (8, 9)]
             for c1, c2 in slots:
                 _fill_box(1, c1, 3, c2)
 
             if kpi_total_prod is not None:
                 _write_kpi(0, "총 생산량 (pcs)", f"{int(kpi_total_prod):,}", None, None)
             if kpi_spec_rate is not None:
-                _write_kpi(4, "규격 대응률 (%)", f"{float(kpi_spec_rate):.1f}%", "일자별(필요SKU∩생산SKU) / 생산SKU", "#1d4ed8")
+                _write_kpi(2, "규격 대응률 (%)", f"{float(kpi_spec_rate):.1f}%", "일자별(필요SKU∩생산SKU) / 생산SKU", "#1d4ed8")
             if kpi_valid is not None:
-                _write_kpi(8, "정확 대응 비중", f"{float(kpi_valid[0]):.1f}%", f"수량: {int(kpi_valid[1]):,} pcs", "#047857")
+                _write_kpi(4, "정확 대응 비중", f"{float(kpi_valid[0]):.1f}%", f"수량: {int(kpi_valid[1]):,} pcs", "#047857")
             if kpi_over is not None:
-                _write_kpi(12, "초과 생산 비중", f"{float(kpi_over[0]):.1f}%", f"수량: {int(kpi_over[1]):,} pcs", "#b91c1c")
+                _write_kpi(6, "초과 생산 비중", f"{float(kpi_over[0]):.1f}%", f"수량: {int(kpi_over[1]):,} pcs", "#b91c1c")
             if kpi_waste is not None:
-                _write_kpi(16, "비정형 생산 비중", f"{float(kpi_waste[0]):.1f}%", f"수량: {int(kpi_waste[1]):,} pcs", "#b45309")
+                _write_kpi(8, "비정형 생산 비중", f"{float(kpi_waste[0]):.1f}%", f"수량: {int(kpi_waste[1]):,} pcs", "#b45309")
 
             # ---- Section 1: Factory bar chart + table ----
             worksheet.write(sec1_top, 0, "선택지표 (공장 비교)", fmt_section)
