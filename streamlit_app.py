@@ -94,12 +94,35 @@ def _build_excel_report_bytes(
         fmt_note = workbook.add_format({"font_size": 10, "font_color": "#6b7280"})
         fmt_header_bg = workbook.add_format({"bold": True, "bg_color": "#f3f4f6", "border": 1})
 
-        # Hidden data sheet to avoid polluting report layout (no more M column spillover)
-        data_sheet_name = "_DATA"
+        # Hidden data sheet for chart source ranges (Excel charts must reference cells on a worksheet).
+        # Keep it hidden so the report sheets remain clean.
+        data_sheet_name = "DATA"
         data_ws = workbook.add_worksheet(data_sheet_name)
         data_ws.hide()
         writer.sheets[data_sheet_name] = data_ws
         data_next_row = 0
+
+        chart_font = "Malgun Gothic"
+        title_font = {"name": chart_font, "size": 20, "bold": True, "color": "#111827"}
+        axis_title_font = {"name": chart_font, "size": 11, "bold": False, "color": "#374151"}
+        axis_num_font = {"name": chart_font, "size": 10, "color": "#374151"}
+        legend_font = {"name": chart_font, "size": 10, "color": "#374151"}
+        gridline_color = "#e5e7eb"
+
+        def _ymax_0_100(series_max: float | None) -> int:
+            if series_max is None:
+                return 100
+            try:
+                v = float(series_max)
+            except Exception:
+                return 100
+            if not np.isfinite(v):
+                return 100
+            v = max(0.0, min(100.0, v))
+            # round up to nearest 10, but at least 20 for readability
+            ymax = int(np.ceil(v / 10.0) * 10.0)
+            ymax = max(20, min(100, ymax))
+            return ymax
 
         for metric in metric_order:
             sheet_name = _safe_sheet_name(metric_sheet_map.get(metric, metric))
@@ -151,6 +174,7 @@ def _build_excel_report_bytes(
                 cols = list(factory_table.columns)
                 cat_col = cols.index("공장")
                 val_col = cols.index("선택지표") if "선택지표" in cols else (len(cols) - 1)
+                y_max = _ymax_0_100(pd.to_numeric(factory_table["선택지표"], errors="coerce").max() if "선택지표" in cols else None)
 
                 categories = f"='{sheet_name}'!{xl_rowcol_to_cell(data_first_row, cat_col)}:{xl_rowcol_to_cell(data_last_row, cat_col)}"
                 values = f"='{sheet_name}'!{xl_rowcol_to_cell(data_first_row, val_col)}:{xl_rowcol_to_cell(data_last_row, val_col)}"
@@ -170,12 +194,34 @@ def _build_excel_report_bytes(
                         "border": {"none": True},
                     }
                 )
-                chart.set_title({"name": f"공장별 {metric} (%)"})
-                chart.set_y_axis({"name": "%", "min": 0, "max": 100, "major_gridlines": {"visible": True}})
+                chart.set_title({"name": f"공장별 {metric} (%)", "name_font": title_font})
+                chart.set_x_axis(
+                    {
+                        "name": "공장",
+                        "name_font": axis_title_font,
+                        "num_font": axis_num_font,
+                        "major_gridlines": {"visible": False},
+                        "line": {"none": True},
+                        "tick_mark": "none",
+                    }
+                )
+                chart.set_y_axis(
+                    {
+                        "name": "",
+                        "min": 0,
+                        "max": y_max,
+                        "name_font": axis_title_font,
+                        "num_font": axis_num_font,
+                        "major_gridlines": {"visible": True, "line": {"color": gridline_color}},
+                        "line": {"none": True},
+                        "tick_mark": "none",
+                    }
+                )
                 chart.set_legend({"none": True})
                 chart.set_style(10)
-                chart.set_plotarea({"border": {"none": True}})
-                chart.set_chartarea({"border": {"none": True}})
+                chart.set_plotarea({"border": {"none": True}, "fill": {"color": "#ffffff"}})
+                chart.set_chartarea({"border": {"none": True}, "fill": {"color": "#ffffff"}})
+                chart.set_gap(70)
                 worksheet.insert_chart(chart_row, 0, chart, {"x_scale": chart_x_scale, "y_scale": chart_y_scale})
             else:
                 worksheet.write(table_row, 0, "데이터 없음")
@@ -204,13 +250,38 @@ def _build_excel_report_bytes(
                 data_next_row = date_last + 3
 
                 chart2 = workbook.add_chart({"type": "line"})
-                chart2.set_title({"name": f"공장별 {metric} 추이"})
-                chart2.set_y_axis({"name": "%", "min": 0, "max": 100, "major_gridlines": {"visible": True}})
-                chart2.set_legend({"position": "top"})
+                y2_max = _ymax_0_100(pd.to_numeric(tmp["값"], errors="coerce").max())
+                chart2.set_title({"name": f"공장별 {metric} 추이", "name_font": title_font})
+                chart2.set_x_axis(
+                    {
+                        "name": "기간",
+                        "name_font": axis_title_font,
+                        "num_font": axis_num_font,
+                        "num_format": "yyyy-mm-dd",
+                        "label_position": "low",
+                        "major_gridlines": {"visible": False},
+                        "line": {"none": True},
+                        "tick_mark": "none",
+                        "text_axis": True,
+                        "rotation": 45,
+                    }
+                )
+                chart2.set_y_axis(
+                    {
+                        "name": "",
+                        "min": 0,
+                        "max": y2_max,
+                        "name_font": axis_title_font,
+                        "num_font": axis_num_font,
+                        "major_gridlines": {"visible": True, "line": {"color": gridline_color}},
+                        "line": {"none": True},
+                        "tick_mark": "none",
+                    }
+                )
+                chart2.set_legend({"position": "top", "font": legend_font})
                 chart2.set_style(10)
-                chart2.set_x_axis({"num_format": "yyyy-mm-dd"})
-                chart2.set_plotarea({"border": {"none": True}})
-                chart2.set_chartarea({"border": {"none": True}})
+                chart2.set_plotarea({"border": {"none": True}, "fill": {"color": "#ffffff"}})
+                chart2.set_chartarea({"border": {"none": True}, "fill": {"color": "#ffffff"}})
 
                 series_colors = ["#0b63ce", "#8fd0ff", "#ff2b2b"]
 
@@ -221,7 +292,9 @@ def _build_excel_report_bytes(
                             "name": str(col_name),
                             "categories": f"='{data_sheet_name}'!{xl_rowcol_to_cell(date_first, date_col)}:{xl_rowcol_to_cell(date_last, date_col)}",
                             "values": f"='{data_sheet_name}'!{xl_rowcol_to_cell(date_first, val_c)}:{xl_rowcol_to_cell(date_last, val_c)}",
-                            "line": {"width": 2.25, "color": series_colors[(j - 1) % len(series_colors)]},
+                            "line": {"width": 2.75, "color": series_colors[(j - 1) % len(series_colors)]},
+                            "marker": {"type": "none"},
+                            "smooth": True,
                         }
                     )
 
@@ -244,9 +317,7 @@ def _build_excel_report_bytes(
                 worksheet.write(table3_row, 0, "데이터 없음")
 
             worksheet.freeze_panes(1, 0)
-            worksheet.set_column(0, 0, 14)
-            worksheet.set_column(1, 1, 16)
-            worksheet.set_column(2, 20, 18)
+            # Do not override per-column number formats set by _apply_table_formats.
             # A4 landscape print-friendly
             try:
                 worksheet.set_landscape()
