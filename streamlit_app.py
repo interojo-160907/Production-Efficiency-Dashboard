@@ -412,10 +412,8 @@ def _build_excel_report_bytes(
                 src_col = 0
                 if data_ws is None:
                     data_ws = workbook.add_worksheet(data_sheet_name)
-                    try:
-                        data_ws.very_hidden()
-                    except Exception:
-                        data_ws.hide()
+                    # Keep it hidden (but user-unhideable) so it won't be the first visible sheet.
+                    data_ws.hide()
                     writer.sheets[data_sheet_name] = data_ws
                 _write_chart_source_df(writer, data_sheet_name, df=wide, startrow=src_row, startcol=src_col)
                 date_col = src_col
