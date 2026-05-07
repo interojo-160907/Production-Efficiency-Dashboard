@@ -186,6 +186,8 @@ def _build_excel_report_bytes(
                         "categories": categories,
                         "values": values,
                         "data_labels": {"value": True, "num_format": "0.0\"%\""},
+                        "gap": 70,
+                        "overlap": 0,
                         "points": [
                             {"fill": {"color": "#0b63ce"}},  # A관
                             {"fill": {"color": "#8fd0ff"}},  # C관
@@ -221,7 +223,6 @@ def _build_excel_report_bytes(
                 chart.set_style(10)
                 chart.set_plotarea({"border": {"none": True}, "fill": {"color": "#ffffff"}})
                 chart.set_chartarea({"border": {"none": True}, "fill": {"color": "#ffffff"}})
-                chart.set_gap(70)
                 worksheet.insert_chart(chart_row, 0, chart, {"x_scale": chart_x_scale, "y_scale": chart_y_scale})
             else:
                 worksheet.write(table_row, 0, "데이터 없음")
