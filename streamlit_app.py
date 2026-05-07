@@ -403,8 +403,16 @@ def _build_excel_report_bytes(
                         axis_end = _end_date_obj
 
                 if axis_start is not None and axis_end is not None:
-                    full_days = pd.date_range(pd.Timestamp(axis_start), pd.Timestamp(axis_end), freq="D")
-                    full_df = pd.DataFrame({"기간": full_days})
+                    # Use same bucket axis as the dashboard (D/W/M) so the chart has values on each tick.
+                    span_days = (axis_end - axis_start).days + 1
+                    if span_days <= 30:
+                        axis_bucket = "D"
+                    elif span_days <= 210:
+                        axis_bucket = "W"
+                    else:
+                        axis_bucket = "M"
+                    axis_idx = _build_axis(axis_start, axis_end, axis_bucket)
+                    full_df = pd.DataFrame({"기간": axis_idx})
                     wide["기간"] = pd.to_datetime(wide["기간"], errors="coerce")
                     wide = full_df.merge(wide, on="기간", how="left")
                 # Put chart source into hidden _DATA sheet
@@ -412,8 +420,7 @@ def _build_excel_report_bytes(
                 src_col = 0
                 if data_ws is None:
                     data_ws = workbook.add_worksheet(data_sheet_name)
-                    # Keep it hidden (but user-unhideable) so it won't be the first visible sheet.
-                    data_ws.hide()
+                    # Keep DATA visible (user requested), but create it last so it doesn't open first.
                     writer.sheets[data_sheet_name] = data_ws
                 _write_chart_source_df(writer, data_sheet_name, df=wide, startrow=src_row, startcol=src_col)
                 date_col = src_col
