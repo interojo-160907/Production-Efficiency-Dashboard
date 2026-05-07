@@ -11,7 +11,10 @@ import plotly.express as px
 import io
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
+from matplotlib import font_manager as _fm
 
+_MALGUN_TTF = _fm.findfont("Malgun Gothic", fallback_to_default=False)
+_KOR_FP = _fm.FontProperties(fname=_MALGUN_TTF)
 rcParams["font.family"] = "Malgun Gothic"
 rcParams["axes.unicode_minus"] = False
 
@@ -25,7 +28,11 @@ def _safe_sheet_name(name: str) -> str:
 
 def _mpl_to_png_bytes(fig) -> bytes:
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=220, bbox_inches="tight", facecolor="white")
+    try:
+        fig.tight_layout()
+    except Exception:
+        pass
+    fig.savefig(buf, format="png", dpi=240, bbox_inches="tight", pad_inches=0.35, facecolor="white")
     plt.close(fig)
     buf.seek(0)
     return buf.getvalue()
@@ -43,12 +50,22 @@ def _bar_png_from_factory_table(factory_table: pd.DataFrame, metric: str) -> byt
     fig, ax = plt.subplots(figsize=(10.5, 3.8))
     bars = ax.bar(x, y, color=["#2563eb", "#f97316", "#16a34a"][: len(x)])
     ax.set_ylim(0, 105)
-    ax.set_title(f"공장별 {metric} (%)", pad=10)
-    ax.set_ylabel("%")
+    ax.set_title(f"공장별 {metric} (%)", pad=10, fontproperties=_KOR_FP)
+    ax.set_ylabel("%", fontproperties=_KOR_FP)
     ax.grid(axis="y", alpha=0.25)
     ax.tick_params(axis="x", labelrotation=0)
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
+        label.set_fontproperties(_KOR_FP)
     for b, v in zip(bars, y, strict=False):
-        ax.text(b.get_x() + b.get_width() / 2, min(v + 1, 104), f"{v:.1f}%", ha="center", va="bottom", fontsize=9)
+        ax.text(
+            b.get_x() + b.get_width() / 2,
+            min(v + 1.2, 104),
+            f"{v:.1f}%",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+            fontproperties=_KOR_FP,
+        )
 
     return _mpl_to_png_bytes(fig)
 
@@ -69,14 +86,19 @@ def _line_png_from_ts_df(ts_df: pd.DataFrame, metric: str) -> bytes | None:
     fig, ax = plt.subplots(figsize=(10.5, 3.8))
     for factory, g in df.groupby("공장", sort=False):
         g = g.sort_values("기간")
-        ax.plot(g["기간"], g["값"], linewidth=2.0, label=str(factory))
+        ax.plot(g["기간"], g["값"], linewidth=2.2, label=str(factory))
 
     ax.set_ylim(0, 105)
-    ax.set_title(f"공장별 {metric} 추이", pad=10)
-    ax.set_ylabel("%")
+    ax.set_title(f"공장별 {metric} 추이", pad=10, fontproperties=_KOR_FP)
+    ax.set_ylabel("%", fontproperties=_KOR_FP)
     ax.grid(alpha=0.25)
-    ax.legend(loc="upper left", ncols=3, fontsize=8, frameon=False)
+    leg = ax.legend(loc="upper left", ncols=3, fontsize=8, frameon=False)
+    if leg is not None:
+        for t in leg.get_texts():
+            t.set_fontproperties(_KOR_FP)
     fig.autofmt_xdate(rotation=45, ha="right")
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
+        label.set_fontproperties(_KOR_FP)
 
     return _mpl_to_png_bytes(fig)
 
