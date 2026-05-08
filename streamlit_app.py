@@ -398,6 +398,7 @@ def _build_excel_report_bytes(
                 filter_option = payload.get("filter_option")
                 axis_start = _start_date_obj
                 axis_end = _end_date_obj
+                axis_bucket = "D"
                 if axis_start is not None and axis_end is not None and filter_option in {"당월", "전월"}:
                     try:
                         axis_end = _month_end(axis_start)
@@ -405,14 +406,19 @@ def _build_excel_report_bytes(
                         axis_end = _end_date_obj
 
                 if axis_start is not None and axis_end is not None:
-                    # Use same bucket axis as the dashboard (D/W/M) so the chart has values on each tick.
-                    span_days = (axis_end - axis_start).days + 1
-                    if span_days <= 30:
+                    # Match dashboard behavior:
+                    # - 당월/전월: always use daily axis (D) even if we extend to month-end.
+                    # - 기간조회: choose D/W/M by span.
+                    if filter_option in {"당월", "전월"}:
                         axis_bucket = "D"
-                    elif span_days <= 210:
-                        axis_bucket = "W"
                     else:
-                        axis_bucket = "M"
+                        span_days = (axis_end - axis_start).days + 1
+                        if span_days <= 30:
+                            axis_bucket = "D"
+                        elif span_days <= 210:
+                            axis_bucket = "W"
+                        else:
+                            axis_bucket = "M"
                     axis_idx = _build_axis(axis_start, axis_end, axis_bucket)
                     full_df = pd.DataFrame({"기간": axis_idx})
                     wide["기간"] = pd.to_datetime(wide["기간"], errors="coerce")
@@ -429,16 +435,8 @@ def _build_excel_report_bytes(
                 chart2 = workbook.add_chart({"type": "line"})
                 y2_max = _ymax_0_100(pd.to_numeric(tmp["값"], errors="coerce").max())
                 chart2.set_title({"name": f"공장별 {metric} 추이", "name_font": title_font})
-                # Bucket x-axis labels similar to dashboard: D (<=30d), W (<=210d), else M.
-                bucket = "D"
-                if _start_date_obj is not None and _end_date_obj is not None:
-                    span_days = (_end_date_obj - _start_date_obj).days + 1
-                    if span_days <= 30:
-                        bucket = "D"
-                    elif span_days <= 210:
-                        bucket = "W"
-                    else:
-                        bucket = "M"
+                # Keep x-axis settings consistent with the axis bucket used for the chart source.
+                bucket = axis_bucket
 
                 x_axis_opts = {
                     "name": "기간",
