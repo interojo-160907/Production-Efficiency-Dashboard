@@ -2718,7 +2718,7 @@ try:
                         fig_fac.add_shape(type="line", xref="paper", yref="paper", x0=0, x1=1, y0=1/3, y1=1/3, line=dict(color="#E5E7EB", width=2))
                         st.plotly_chart(fig_fac, use_container_width=True)
 
-                st.markdown("#### 관별 생산 구성비(정확/초과/비정형)")
+                st.markdown("#### 관별 감점 요인(초과/비정형)")
                 if len(proc_acs) == 0:
                     st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
                 else:
@@ -2730,22 +2730,33 @@ try:
                         else:
                             comp[c] = 0.0
 
-                    comp["정확(%)"] = np.where(comp["실적수량"] > 0, comp["유효생산량"] / comp["실적수량"] * 100, 0.0)
                     comp["초과(%)"] = np.where(comp["실적수량"] > 0, comp["과생산량"] / comp["실적수량"] * 100, 0.0)
                     comp["비정형(%)"] = np.where(comp["실적수량"] > 0, comp["불필요생산량"] / comp["실적수량"] * 100, 0.0)
-                    for c in ["정확(%)", "초과(%)", "비정형(%)"]:
+                    for c in ["초과(%)", "비정형(%)"]:
                         comp[c] = pd.to_numeric(comp[c], errors="coerce").fillna(0).clip(0, 100)
+
+                    # 관별 종합점수(공정점수의 실적 가중평균) -> 감점(=100-종합점수) 계산용
+                    by_factory_score = (
+                        proc_acs.groupby("공장그룹", dropna=False)
+                        .apply(
+                            lambda g: (g["공정점수"] * pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0)).sum()
+                            / max(float(pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0).sum()), 1.0)
+                        )
+                        .rename("종합점수")
+                        .reset_index()
+                    )
+                    by_factory_score["종합점수"] = pd.to_numeric(by_factory_score["종합점수"], errors="coerce").fillna(0).clip(0, 100)
+                    score_map = {str(r["공장그룹"]): float(r["종합점수"]) for _, r in by_factory_score.iterrows()}
 
                     comp_map = {str(r["공장그룹"]): r for _, r in comp.iterrows()}
                     donut_cols = st.columns(3, gap="large")
-                    donut_colors = {"정확": "#16A34A", "초과": "#EF4444", "비정형": "#F59E0B"}
+                    donut_colors = {"초과": "#EF4444", "비정형": "#F59E0B"}
 
                     legend_html = (
                         "<div style='display:flex; gap:16px; align-items:center; margin:6px 0 10px 0; flex-wrap:wrap;'>"
-                        "<div style='display:flex; align-items:center; gap:8px;'><span style='width:12px; height:12px; border-radius:3px; background:#16A34A; display:inline-block;'></span><b>정확</b></div>"
                         "<div style='display:flex; align-items:center; gap:8px;'><span style='width:12px; height:12px; border-radius:3px; background:#EF4444; display:inline-block;'></span><b>초과</b></div>"
                         "<div style='display:flex; align-items:center; gap:8px;'><span style='width:12px; height:12px; border-radius:3px; background:#F59E0B; display:inline-block;'></span><b>비정형</b></div>"
-                        "<div style='color:#6B7280'>※ 감점 요인: <b>초과 + 비정형</b></div>"
+                        "<div style='color:#6B7280'>※ 중앙 값은 <b>100 - 관별 종합점수</b> (감점)</div>"
                         "</div>"
                     )
                     st.markdown(legend_html, unsafe_allow_html=True)
@@ -2758,30 +2769,34 @@ try:
                                 st.info("데이터 없음")
                             continue
 
-                        valid = float(row.get("정확(%)", 0.0))
                         over = float(row.get("초과(%)", 0.0))
                         waste = float(row.get("비정형(%)", 0.0))
-                        # 감점은 "초과 + 비정형"으로 정의 (정확은 감점요인이 아님)
-                        total = valid + over + waste
-                        penalty = over + waste
-                        if 99.0 <= total <= 101.0:
-                            penalty = 100.0 - valid
-                        penalty = max(0.0, min(100.0, float(penalty)))
+                        # 감점(전체)은 100 - 종합점수로 표시 (점수의 부족분)
+                        score = float(score_map.get(str(g), 0.0))
+                        penalty_total = max(0.0, min(100.0, 100.0 - score))
+
+                        # 도넛은 "초과 vs 비정형" 비중만 표현 (둘 합이 0이면 0/0 방지)
+                        denom = over + waste
+                        over_share = (over / denom * 100.0) if denom > 0 else 0.0
+                        waste_share = (waste / denom * 100.0) if denom > 0 else 0.0
+                        over_share = float(np.clip(over_share, 0, 100))
+                        waste_share = float(np.clip(waste_share, 0, 100))
 
                         fig_donut = go.Figure(
                             data=[
                                 go.Pie(
-                                    labels=["정확", "초과", "비정형"],
-                                    values=[valid, over, waste],
+                                    labels=["초과", "비정형"],
+                                    values=[over_share, waste_share],
                                     hole=0.62,
                                     sort=False,
                                     direction="clockwise",
-                                    marker=dict(colors=[donut_colors["정확"], donut_colors["초과"], donut_colors["비정형"]]),
+                                    marker=dict(colors=[donut_colors["초과"], donut_colors["비정형"]]),
                                     textinfo="percent",
                                     textposition="inside",
-                                    insidetextorientation="radial",
-                                    textfont=dict(size=18, family="Arial", color="#111827"),
-                                    hovertemplate="%{label}<br>%{value:.1f}%<extra></extra>",
+                                    insidetextorientation="horizontal",
+                                    textfont=dict(size=22, family="Arial", color="#111827"),
+                                    hovertemplate="%{label}<br>비중=%{percent}<br>실적대비=%{customdata:.1f}%<extra></extra>",
+                                    customdata=[over, waste],
                                 )
                             ]
                         )
@@ -2794,10 +2809,10 @@ try:
                             uniformtext_mode="hide",
                             annotations=[
                                 dict(
-                                    text=f"정확<br><b>{valid:.1f}%</b><br><span style='color:#6B7280; font-size:14px;'>감점요인 {penalty:.1f}%</span>",
+                                    text=f"감점<br><b>{penalty_total:.1f}</b><br><span style='color:#6B7280; font-size:14px;'>(100-종합점수)</span>",
                                     x=0.5,
                                     y=0.5,
-                                    font=dict(size=22, family="Arial", color="#111827"),
+                                    font=dict(size=28, family="Arial", color="#B91C1C"),
                                     showarrow=False,
                                 )
                             ],
