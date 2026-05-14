@@ -2619,6 +2619,7 @@ try:
                             range_y=[0, 100],
                             category_orders={"공장": [factory_display[k] for k in factory_order]},
                             color="공장",
+                            text="종합점수",
                             color_discrete_map={
                                 factory_display["A관"]: "#0B62F1",
                                 factory_display["C관"]: "#7CC2FF",
@@ -2626,36 +2627,13 @@ try:
                             },
                         )
                         fig_factory.update_traces(
+                            texttemplate="<b>%{text:.1f}</b>",
+                            textposition="outside",
+                            textfont=dict(size=32, family="Arial", color="#111827"),
                             marker=dict(cornerradius=18),
                             hovertemplate="공장=%{x}<br>종합점수=%{y:.1f}<extra></extra>",
+                            cliponaxis=False,
                         )
-                        # 막대 끝에 '둥근' 배지(Scatter rounded square)로 수치 표시
-                        try:
-                            import plotly.graph_objects as go
-
-                            xs = by_factory["공장"].tolist()
-                            ys = by_factory["종합점수"].astype(float).tolist()
-                            fig_factory.add_trace(
-                                go.Scatter(
-                                    x=xs,
-                                    y=ys,
-                                    mode="markers+text",
-                                    text=[f"{v:.1f}" for v in ys],
-                                    textposition="top center",
-                                    textfont=dict(size=26, family="Arial", color="#111827"),
-                                    marker=dict(
-                                        symbol="square-rounded",
-                                        size=38,
-                                        color="rgba(255,255,255,0.92)",
-                                        line=dict(color="rgba(17,24,39,0.12)", width=1),
-                                    ),
-                                    hoverinfo="skip",
-                                    showlegend=False,
-                                )
-                            )
-                            fig_factory.update_traces(selector=dict(type="scatter"), cliponaxis=False)
-                        except Exception:
-                            fig_factory.update_traces(texttemplate="%{y:.1f}", textposition="outside", cliponaxis=False)
 
                         fig_factory.update_layout(
                             height=chart_height,
