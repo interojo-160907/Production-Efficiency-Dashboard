@@ -2515,6 +2515,16 @@ try:
                 overall_status_html = f"<span style='color:{status_color.get(overall_status, '#111827')}'>{overall_status}</span>"
 
                 proc_score_map = {str(r["공정"]): float(r["평균점수"]) for _, r in by_proc.iterrows()} if len(by_proc) else {}
+
+                def _grade(score: float) -> str:
+                    if score >= 90:
+                        return "양호"
+                    if score >= 80:
+                        return "주의"
+                    if score >= 70:
+                        return "경고"
+                    return "위험"
+
                 k_cols = st.columns([1.25, 1, 1, 1, 1, 1])
                 with k_cols[0]:
                     render_kpi_card(
@@ -2523,15 +2533,37 @@ try:
                         sub=f"등급: {overall_status_html}",
                     )
                 with k_cols[1]:
-                    render_kpi_card("사출 점수", f"{proc_score_map.get('사출', 0.0):.1f}점")
+                    v = float(proc_score_map.get("사출", 0.0))
+                    render_kpi_card("사출 점수", f"{v:.1f}점", sub=f"등급: {_grade(v)}")
                 with k_cols[2]:
-                    render_kpi_card("분리 점수", f"{proc_score_map.get('분리', 0.0):.1f}점")
+                    v = float(proc_score_map.get("분리", 0.0))
+                    render_kpi_card("분리 점수", f"{v:.1f}점", sub=f"등급: {_grade(v)}")
                 with k_cols[3]:
-                    render_kpi_card("하드레이션 점수", f"{proc_score_map.get('하드레이션', 0.0):.1f}점")
+                    v = float(proc_score_map.get("하드레이션", 0.0))
+                    render_kpi_card("하드레이션 점수", f"{v:.1f}점", sub=f"등급: {_grade(v)}")
                 with k_cols[4]:
-                    render_kpi_card("접착 점수", f"{proc_score_map.get('접착', 0.0):.1f}점")
+                    v = float(proc_score_map.get("접착", 0.0))
+                    render_kpi_card("접착 점수", f"{v:.1f}점", sub=f"등급: {_grade(v)}")
                 with k_cols[5]:
-                    render_kpi_card("누수규격 점수", f"{proc_score_map.get('누수규격', 0.0):.1f}점")
+                    v = float(proc_score_map.get("누수규격", 0.0))
+                    render_kpi_card("누수규격 점수", f"{v:.1f}점", sub=f"등급: {_grade(v)}")
+
+                st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+                with st.expander("지표 정의/상세 보기", expanded=False):
+                    st.markdown(
+                        "- `제품명(SKU)` : `제품코드` 앞 5자리(예: `Q1230-...` → `Q1230`)\n"
+                        "- `규격대응률(%)` : 일자/공장/공정별 `(필요 SKU ∩ 생산 SKU) ÷ 생산 SKU` 의 비율\n"
+                        "- `정확대응비중(%)` : `유효생산량 ÷ 실적수량`\n"
+                        "- `초과생산비중(%)` : `과생산량 ÷ 실적수량`\n"
+                        "- `비정형생산비중(%)` : `불필요생산량 ÷ 실적수량`\n"
+                        "- `공정점수(0~100)` : `0.25×규격대응률 + 0.45×정확대응비중 + 0.20×(100-초과생산비중) + 0.10×(100-비정형생산비중)`\n"
+                        "- `등급` : 90↑ 양호 / 80↑ 주의 / 70↑ 경고 / 70↓ 위험\n"
+                        "- `종합점수(공장/전체)` : 각 `공정점수`의 `실적수량` 가중평균"
+                    )
+                    st.caption("참고: 공정 밸런스는 `유효생산량_결과2.xlsx`의 `매칭결과` 시트를 기반으로 계산합니다.")
+
+                st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
                 proc_acs = proc[proc["공장그룹"].isin(factory_order)].copy()
 
