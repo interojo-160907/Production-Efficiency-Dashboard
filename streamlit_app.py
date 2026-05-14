@@ -2314,8 +2314,21 @@ try:
                 if "공정" in proc.columns:
                     proc["공정"] = proc["공정"].replace({"최종공정": "누수규격"})
 
-                target_order = ["사출", "분리", "하드레이션", "접착", "누수규격"]
-                proc = proc[proc["공정"].isin(target_order)].copy()
+                # 공장 필터(옵션): 기간 필터는 기존과 동일하게 상단 필터를 그대로 사용
+                factories = sorted([str(x) for x in proc["공장"].dropna().unique()]) if "공장" in proc.columns else []
+                selected_factories = st.multiselect("공장 선택", factories, default=factories) if factories else []
+                if selected_factories:
+                    proc = proc[proc["공장"].isin(selected_factories)].copy()
+                elif factories:
+                    st.info("선택된 공장이 없습니다.")
+                    st.stop()
+
+                target_order_raw = ["사출", "분리", "하드레이션", "접착", "누수규격"]
+                proc = proc[proc["공정"].isin(target_order_raw)].copy()
+
+                # 표시명(요청: 최종공정)
+                proc["공정_표시"] = proc["공정"].replace({"누수규격": "최종공정"})
+                target_order = ["사출", "분리", "하드레이션", "접착", "최종공정"]
 
                 proc["필요수량"] = (
                     pd.to_numeric(proc["실적수량"], errors="coerce").fillna(0)
@@ -2336,50 +2349,88 @@ try:
                 )
                 proc["과생산감점"] = proc["과생산률"].clip(0, 30)
                 proc["공정점수"] = (proc["기본대응점수"] - proc["과생산감점"]).clip(0, 100)
-                proc["상태"] = pd.cut(proc["공정점수"], bins=[-0.1, 70, 80, 90, 101], labels=["위험", "경고", "주의", "양호"])
+                # 상태 기준:
+                # - 90점 이상 양호
+                # - 80점 이상 주의
+                # - 70점 이상 경고
+                # - 70점 미만 위험
+                proc["상태"] = np.select(
+                    [
+                        proc["공정점수"] >= 90,
+                        proc["공정점수"] >= 80,
+                        proc["공정점수"] >= 70,
+                    ],
+                    ["양호", "주의", "경고"],
+                    default="위험",
+                )
 
                 # 집계(가중: 필요수량)
                 w = proc["필요수량"].clip(lower=0)
                 overall = float((proc["공정점수"] * w).sum() / w.sum()) if float(w.sum()) > 0 else float(proc["공정점수"].mean())
                 by_proc = (
-                    proc.groupby("공정", dropna=False)
+                    proc.groupby("공정_표시", dropna=False)
                     .apply(lambda g: (g["공정점수"] * g["필요수량"].clip(lower=0)).sum() / max(float(g["필요수량"].clip(lower=0).sum()), 1.0))
                     .rename("평균점수")
                     .reset_index()
                 )
                 by_proc["평균점수"] = pd.to_numeric(by_proc["평균점수"], errors="coerce").fillna(0)
+                by_proc = by_proc.rename(columns={"공정_표시": "공정"})
                 by_proc["공정"] = pd.Categorical(by_proc["공정"], categories=target_order, ordered=True)
                 by_proc = by_proc.sort_values("공정")
                 worst_proc = by_proc.sort_values("평균점수").iloc[0]["공정"] if len(by_proc) else "-"
-                max_short_proc = proc.groupby("공정")["부족수량"].sum().sort_values(ascending=False).index[0] if len(proc) else "-"
-                max_over_proc = proc.groupby("공정")["과생산수량"].sum().sort_values(ascending=False).index[0] if len(proc) else "-"
+                max_short_proc = proc.groupby("공정_표시")["부족수량"].sum().sort_values(ascending=False).index[0] if len(proc) else "-"
+                max_over_proc = proc.groupby("공정_표시")["과생산수량"].sum().sort_values(ascending=False).index[0] if len(proc) else "-"
                 risk_count = int((by_proc["평균점수"] < 70).sum()) if len(by_proc) else 0
 
                 k1,k2,k3,k4,k5 = st.columns(5)
-                with k1: render_kpi_card("?? ??? ????", f"<span style='color:#1d4ed8'>{overall:.1f}?</span>")
-                with k2: render_kpi_card("?? ?? ??", f"<span style='color:#b91c1c'>{worst_proc}</span>")
-                with k3: render_kpi_card("???? ?? ??", f"{max_short_proc}")
-                with k4: render_kpi_card("????? ?? ??", f"{max_over_proc}")
-                with k5: render_kpi_card("?? ?? ?", f"<span style='color:#b91c1c'>{risk_count}</span>")
+                with k1: render_kpi_card("공정 밸런스 종합점수", f"<span style='color:#1d4ed8'>{overall:.1f}점</span>")
+                with k2: render_kpi_card("최저 점수 공정", f"<span style='color:#b91c1c'>{worst_proc}</span>")
+                with k3: render_kpi_card("부족수량 최대 공정", f"{max_short_proc}")
+                with k4: render_kpi_card("과생산수량 최대 공정", f"{max_over_proc}")
+                with k5: render_kpi_card("위험 공정 수", f"<span style='color:#b91c1c'>{risk_count}</span>")
 
-                st.markdown("#### ??? ?? ??")
-                fig_bar = px.bar(by_proc, x="??", y="????", range_y=[0,100], text="????")
+                st.markdown("#### 공정별 평균 점수")
+                fig_bar = px.bar(by_proc, x="공정", y="평균점수", range_y=[0, 100], text="평균점수")
                 fig_bar.update_traces(texttemplate="%{text:.1f}", textposition="outside")
-                fig_bar.update_layout(height=360, margin=dict(l=10,r=10,t=30,b=10), yaxis_title="??")
+                fig_bar.update_layout(height=360, margin=dict(l=10, r=10, t=30, b=10), yaxis_title="점수")
                 st.plotly_chart(fig_bar, use_container_width=True)
 
-                st.markdown("#### ??? ?? ?? ??")
-                daily = proc.groupby(["??_date","??"], dropna=False).apply(lambda g: (g["????"] * g["????"].clip(lower=0)).sum() / max(float(g["????"].clip(lower=0).sum()), 1.0)).rename("??").reset_index()
-                daily["??"] = pd.Categorical(daily["??"], categories=target_order, ordered=True)
-                daily = daily.sort_values(["??_date","??"])
-                fig_line = px.line(daily, x="??_date", y="??", color="??", markers=True, range_y=[0,100])
-                fig_line.update_layout(height=380, margin=dict(l=10,r=10,t=30,b=10), xaxis_title="??", yaxis_title="??")
+                st.markdown("#### 일자별 공정 점수 추이")
+                daily = (
+                    proc.groupby(["날짜_date", "공정_표시"], dropna=False)
+                    .apply(lambda g: (g["공정점수"] * g["필요수량"].clip(lower=0)).sum() / max(float(g["필요수량"].clip(lower=0).sum()), 1.0))
+                    .rename("점수")
+                    .reset_index()
+                )
+                daily = daily.rename(columns={"공정_표시": "공정"})
+                daily["공정"] = pd.Categorical(daily["공정"], categories=target_order, ordered=True)
+                daily = daily.sort_values(["날짜_date", "공정"])
+                fig_line = px.line(daily, x="날짜_date", y="점수", color="공정", markers=True, range_y=[0, 100])
+                fig_line.update_layout(height=380, margin=dict(l=10, r=10, t=30, b=10), xaxis_title="날짜", yaxis_title="점수")
                 st.plotly_chart(fig_line, use_container_width=True)
 
-                st.markdown("#### ??")
-                detail_cols = [c for c in ["??_date","??","??","????","????","?????","????","????","??"] if c in proc.columns]
+                st.markdown("#### 상세 테이블")
+                proc["공정"] = proc["공정_표시"]
+                detail_cols = [
+                    c
+                    for c in [
+                        "날짜_date",
+                        "공장",
+                        "공정",
+                        "실적수량",
+                        "부족수량",
+                        "과생산수량",
+                        "필요수량",
+                        "기본대응점수",
+                        "과생산률",
+                        "과생산감점",
+                        "공정점수",
+                        "상태",
+                    ]
+                    if c in proc.columns
+                ]
                 detail = proc[detail_cols].copy()
-                detail = detail.sort_values(["??_date","??","??"], ascending=[False, True, True])
+                detail = detail.sort_values(["날짜_date", "공장", "공정"], ascending=[False, True, True])
                 st.dataframe(detail, use_container_width=True, height=520)
 except Exception as e:
     st.error(f"❌ 오류가 발생했습니다: {str(e)}")
