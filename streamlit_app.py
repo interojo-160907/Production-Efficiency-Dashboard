@@ -2854,7 +2854,7 @@ try:
                                             go.Pie(
                                                 labels=["초과", "비정형"],
                                                 values=[over_share, waste_share],
-                                                hole=0.70,
+                                                hole=0.0,
                                                 sort=False,
                                                 direction="clockwise",
                                                 marker=dict(colors=[donut_colors["초과"], donut_colors["비정형"]]),
@@ -2869,18 +2869,9 @@ try:
                                         ]
                                     )
                                     fig_small.update_layout(
-                                        height=170,
+                                        height=150,
                                         margin=dict(l=0, r=0, t=10, b=10),
                                         showlegend=False,
-                                        annotations=[
-                                            dict(
-                                                text=f"{min(100.0, denom):.1f}%",
-                                                x=0.5,
-                                                y=0.5,
-                                                font=dict(size=14, family="Arial", color="#B91C1C"),
-                                                showarrow=False,
-                                            )
-                                        ],
                                     )
 
                                     with proc_cols[j]:
