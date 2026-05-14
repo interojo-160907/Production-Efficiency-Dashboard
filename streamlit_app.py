@@ -2359,66 +2359,127 @@ try:
         st.markdown("### ⚖️ 공정 밸런스")
         if not result2_candidates:
             st.info("`유효생산량_결과2*.xlsx` 파일을 찾을 수 없습니다. 결과2를 생성한 뒤, repo 루트 또는 `outputs/`에 넣어주세요.")
-        elif (not process_has_sheet) or (process_daily is None) or (len(process_daily) == 0):
-            st.info("`공정별_일별실적` 시트가 없거나 데이터가 없습니다.")
+        elif (process_detail is None) or (len(process_detail) == 0) or (not process_detail_has_sheet):
+            st.info("`매칭결과` 시트가 없거나 데이터가 없습니다. (공정 밸런스 점수 계산 불가)")
         else:
-            proc = process_daily.copy()
+            det = process_detail.copy()
             # 기간 필터 동일 적용 + 금일 제외
-            proc = proc[(proc["날짜_date"] >= start_date) & (proc["날짜_date"] <= end_date) & (proc["날짜_date"] != today)].copy()
-            if len(proc) == 0:
+            if "날짜_date" in det.columns:
+                det = det[(det["날짜_date"] >= start_date) & (det["날짜_date"] <= end_date) & (det["날짜_date"] != today)].copy()
+            if len(det) == 0:
                 st.info("선택한 기간에 공정별 데이터가 없습니다.")
             else:
                 # Backward-compat for older 결과2 파일
-                if "공정" in proc.columns:
-                    proc["공정"] = proc["공정"].replace({"최종공정": "누수규격"})
+                if "공정" in det.columns:
+                    det["공정"] = det["공정"].replace({"최종공정": "누수규격"})
 
-                target_order_raw = ["사출", "분리", "하드레이션", "접착", "누수규격"]
-                proc = proc[proc["공정"].isin(target_order_raw)].copy()
-
-                # 표시명(요청: 최종공정)
-                proc["공정_표시"] = proc["공정"].replace({"누수규격": "최종공정"})
-                target_order = ["사출", "분리", "하드레이션", "접착", "최종공정"]
+                target_order = ["사출", "분리", "하드레이션", "접착", "누수규격"]
+                if "공정" in det.columns:
+                    det = det[det["공정"].isin(target_order)].copy()
 
                 # 공장 그룹(A/C/S관) 매핑 + 순서 고정
-                if "공장" in proc.columns:
-                    proc["공장그룹"] = np.select(
+                if "공장" in det.columns:
+                    det["공장그룹"] = np.select(
                         [
-                            proc["공장"].astype(str).str.contains("A관", na=False),
-                            proc["공장"].astype(str).str.contains("C관", na=False),
-                            proc["공장"].astype(str).str.contains("S관", na=False),
+                            det["공장"].astype(str).str.contains("A관", na=False),
+                            det["공장"].astype(str).str.contains("C관", na=False),
+                            det["공장"].astype(str).str.contains("S관", na=False),
                         ],
                         ["A관", "C관", "S관"],
                         default="기타",
                     )
                 else:
-                    proc["공장그룹"] = "기타"
+                    det["공장그룹"] = "기타"
                 factory_order = ["A관", "C관", "S관"]
-                proc["공장그룹"] = pd.Categorical(proc["공장그룹"], categories=factory_order + ["기타"], ordered=True)
+                det["공장그룹"] = pd.Categorical(det["공장그룹"], categories=factory_order + ["기타"], ordered=True)
 
-                proc["필요수량"] = (
-                    pd.to_numeric(proc["실적수량"], errors="coerce").fillna(0)
-                    + pd.to_numeric(proc["부족수량"], errors="coerce").fillna(0)
-                )
-                proc["기본대응점수"] = np.where(
-                    proc["필요수량"] > 0,
-                    pd.to_numeric(proc["실적수량"], errors="coerce").fillna(0) / proc["필요수량"] * 100,
-                    100.0,
-                )
-                proc["기본대응점수"] = proc["기본대응점수"].clip(0, 100)
-                proc["과생산률"] = np.where(
-                    pd.to_numeric(proc["실적수량"], errors="coerce").fillna(0) > 0,
-                    pd.to_numeric(proc["과생산수량"], errors="coerce").fillna(0)
-                    / pd.to_numeric(proc["실적수량"], errors="coerce").fillna(0)
-                    * 100,
+                # 제품명: 제품코드 앞자리 5글자(예: Q1230)
+                if "제품코드" in det.columns:
+                    det["제품명"] = det["제품코드"].astype(str).str.slice(0, 5)
+
+                # ---- 공정 점수 산출(부족수량 기반 필요수량 사용 X) ----
+                # 1) 규격 대응 SKU 점수화: (필요 SKU ∩ 생산 SKU) / 생산 SKU
+                # 2) 정확대응 비중: 유효생산량 / 실적수량
+                # 3) 초과생산 비중: 과생산량 / 실적수량
+                # 4) 비정형 생산 비중: 불필요생산량 / 실적수량
+                # 점수 합성(가중): SKU 25%, 정확 45%, 초과감점 20%, 비정형감점 10%
+                group_keys = [c for c in ["날짜_date", "공장", "공장그룹", "공정"] if c in det.columns]
+                if not group_keys:
+                    st.info("공정 밸런스 계산에 필요한 컬럼(날짜/공장/공정)이 부족합니다.")
+                    st.stop()
+
+                # 수량 집계
+                agg_cols = [c for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량", "부족수량", "필요수량"] if c in det.columns]
+                qty = det.groupby(group_keys, dropna=False)[agg_cols].sum().reset_index() if agg_cols else det[group_keys].drop_duplicates()
+                for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량", "부족수량", "필요수량"]:
+                    if c in qty.columns:
+                        qty[c] = pd.to_numeric(qty[c], errors="coerce").fillna(0)
+
+                # SKU 집계(제품명 기준)
+                if "제품명" in det.columns:
+                    produced = (
+                        det[pd.to_numeric(det.get("실적수량", 0), errors="coerce").fillna(0) > 0]
+                        .groupby(group_keys, dropna=False)["제품명"]
+                        .nunique()
+                        .rename("생산SKU수")
+                    )
+                    needed = (
+                        det[pd.to_numeric(det.get("필요수량", 0), errors="coerce").fillna(0) > 0]
+                        .groupby(group_keys, dropna=False)["제품명"]
+                        .nunique()
+                        .rename("필요SKU수")
+                    )
+                    inter = (
+                        det[
+                            (pd.to_numeric(det.get("실적수량", 0), errors="coerce").fillna(0) > 0)
+                            & (pd.to_numeric(det.get("필요수량", 0), errors="coerce").fillna(0) > 0)
+                        ]
+                        .groupby(group_keys, dropna=False)["제품명"]
+                        .nunique()
+                        .rename("규격대응SKU수")
+                    )
+                    sku = pd.concat([produced, needed, inter], axis=1).fillna(0).reset_index()
+                else:
+                    sku = pd.DataFrame(columns=group_keys + ["생산SKU수", "필요SKU수", "규격대응SKU수"])
+
+                proc = qty.merge(sku, on=group_keys, how="left")
+                for c in ["생산SKU수", "필요SKU수", "규격대응SKU수"]:
+                    if c in proc.columns:
+                        proc[c] = pd.to_numeric(proc[c], errors="coerce").fillna(0)
+
+                proc["규격대응률(%)"] = np.where(
+                    proc.get("생산SKU수", 0) > 0,
+                    proc.get("규격대응SKU수", 0) / proc.get("생산SKU수", 0) * 100,
                     0.0,
                 )
-                proc["과생산감점"] = proc["과생산률"].clip(0, 30)
-                proc["공정점수"] = (proc["기본대응점수"] - proc["과생산감점"]).clip(0, 100)
-                # 상태 기준:
-                # - 90점 이상 양호
-                # - 80점 이상 주의
-                # - 70점 이상 경고
-                # - 70점 미만 위험
+                proc["정확대응비중(%)"] = np.where(
+                    proc.get("실적수량", 0) > 0,
+                    proc.get("유효생산량", 0) / proc.get("실적수량", 0) * 100,
+                    0.0,
+                )
+                proc["초과생산비중(%)"] = np.where(
+                    proc.get("실적수량", 0) > 0,
+                    proc.get("과생산량", 0) / proc.get("실적수량", 0) * 100,
+                    0.0,
+                )
+                proc["비정형생산비중(%)"] = np.where(
+                    proc.get("실적수량", 0) > 0,
+                    proc.get("불필요생산량", 0) / proc.get("실적수량", 0) * 100,
+                    0.0,
+                )
+
+                proc["규격대응률(%)"] = pd.to_numeric(proc["규격대응률(%)"], errors="coerce").fillna(0).clip(0, 100)
+                proc["정확대응비중(%)"] = pd.to_numeric(proc["정확대응비중(%)"], errors="coerce").fillna(0).clip(0, 100)
+                proc["초과생산비중(%)"] = pd.to_numeric(proc["초과생산비중(%)"], errors="coerce").fillna(0).clip(0, 300)
+                proc["비정형생산비중(%)"] = pd.to_numeric(proc["비정형생산비중(%)"], errors="coerce").fillna(0).clip(0, 300)
+
+                proc["공정점수"] = (
+                    proc["규격대응률(%)"] * 0.25
+                    + proc["정확대응비중(%)"] * 0.45
+                    + (100 - proc["초과생산비중(%)"].clip(0, 100)) * 0.20
+                    + (100 - proc["비정형생산비중(%)"].clip(0, 100)) * 0.10
+                ).clip(0, 100)
+
                 proc["상태"] = np.select(
                     [
                         proc["공정점수"] >= 90,
@@ -2429,22 +2490,19 @@ try:
                     default="위험",
                 )
 
-                # 집계(가중: 필요수량)
-                w = proc["필요수량"].clip(lower=0)
+                # 집계(가중: 실적수량)
+                w = pd.to_numeric(proc.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0)
                 overall = float((proc["공정점수"] * w).sum() / w.sum()) if float(w.sum()) > 0 else float(proc["공정점수"].mean())
                 by_proc = (
-                    proc.groupby("공정_표시", dropna=False)
-                    .apply(lambda g: (g["공정점수"] * g["필요수량"].clip(lower=0)).sum() / max(float(g["필요수량"].clip(lower=0).sum()), 1.0))
+                    proc.groupby("공정", dropna=False)
+                    .apply(lambda g: (g["공정점수"] * pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0)).sum() / max(float(pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0).sum()), 1.0))
                     .rename("평균점수")
                     .reset_index()
                 )
                 by_proc["평균점수"] = pd.to_numeric(by_proc["평균점수"], errors="coerce").fillna(0)
-                by_proc = by_proc.rename(columns={"공정_표시": "공정"})
                 by_proc["공정"] = pd.Categorical(by_proc["공정"], categories=target_order, ordered=True)
                 by_proc = by_proc.sort_values("공정")
                 worst_proc = by_proc.sort_values("평균점수").iloc[0]["공정"] if len(by_proc) else "-"
-                max_short_proc = proc.groupby("공정_표시")["부족수량"].sum().sort_values(ascending=False).index[0] if len(proc) else "-"
-                max_over_proc = proc.groupby("공정_표시")["과생산수량"].sum().sort_values(ascending=False).index[0] if len(proc) else "-"
                 risk_count = int((by_proc["평균점수"] < 70).sum()) if len(by_proc) else 0
 
                 overall_status = (
@@ -2473,7 +2531,7 @@ try:
                 with k_cols[4]:
                     render_kpi_card("접착 점수", f"{proc_score_map.get('접착', 0.0):.1f}점")
                 with k_cols[5]:
-                    render_kpi_card("최종공정 점수", f"{proc_score_map.get('최종공정', 0.0):.1f}점")
+                    render_kpi_card("누수규격 점수", f"{proc_score_map.get('누수규격', 0.0):.1f}점")
 
                 proc_acs = proc[proc["공장그룹"].isin(factory_order)].copy()
 
@@ -2482,12 +2540,11 @@ try:
                     st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
                 else:
                     by_fac_proc = (
-                        proc_acs.groupby(["공장그룹", "공정_표시"], dropna=False)
-                        .apply(lambda g: (g["공정점수"] * g["필요수량"].clip(lower=0)).sum() / max(float(g["필요수량"].clip(lower=0).sum()), 1.0))
+                        proc_acs.groupby(["공장그룹", "공정"], dropna=False)
+                        .apply(lambda g: (g["공정점수"] * pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0)).sum() / max(float(pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0).sum()), 1.0))
                         .rename("평균점수")
                         .reset_index()
                     )
-                    by_fac_proc = by_fac_proc.rename(columns={"공정_표시": "공정"})
                     by_fac_proc["평균점수"] = pd.to_numeric(by_fac_proc["평균점수"], errors="coerce").fillna(0)
                     by_fac_proc["공정"] = pd.Categorical(by_fac_proc["공정"], categories=target_order, ordered=True)
                     by_fac_proc = by_fac_proc.sort_values(["공장그룹", "공정"])
@@ -2525,12 +2582,11 @@ try:
                 st.markdown("#### 일자별 공정 점수 추이 (A/C/S관)")
                 if len(proc_acs) > 0:
                     daily = (
-                        proc_acs.groupby(["날짜_date", "공장그룹", "공정_표시"], dropna=False)
-                        .apply(lambda g: (g["공정점수"] * g["필요수량"].clip(lower=0)).sum() / max(float(g["필요수량"].clip(lower=0).sum()), 1.0))
+                        proc_acs.groupby(["날짜_date", "공장그룹", "공정"], dropna=False)
+                        .apply(lambda g: (g["공정점수"] * pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0)).sum() / max(float(pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0).sum()), 1.0))
                         .rename("점수")
                         .reset_index()
                     )
-                    daily = daily.rename(columns={"공정_표시": "공정"})
                     daily["공정"] = pd.Categorical(daily["공정"], categories=target_order, ordered=True)
                     daily = daily.sort_values(["날짜_date", "공장그룹", "공정"])
                     fig_line = px.line(
@@ -2559,31 +2615,49 @@ try:
                     fig_line.update_yaxes(title_text="점수", row=1, col=1)
                     fig_line.update_yaxes(title_text="", row=2, col=1)
                     fig_line.update_yaxes(title_text="", row=3, col=1)
-                    st.plotly_chart(fig_line, use_container_width=True)
+                st.plotly_chart(fig_line, use_container_width=True)
 
                 st.markdown("#### 공장별 요약")
-                proc["공정"] = proc["공정_표시"]
                 summary = (
-                    proc.groupby(["날짜_date", "공장그룹", "공장", "공정"], dropna=False)
-                    .apply(
-                        lambda g: pd.Series(
-                            {
-                                "실적수량": float(pd.to_numeric(g["실적수량"], errors="coerce").fillna(0).sum()),
-                                "부족수량": float(pd.to_numeric(g["부족수량"], errors="coerce").fillna(0).sum()),
-                                "과생산수량": float(pd.to_numeric(g["과생산수량"], errors="coerce").fillna(0).sum()),
-                                "필요수량": float(pd.to_numeric(g["필요수량"], errors="coerce").fillna(0).sum()),
-                                "공정점수": float((g["공정점수"] * g["필요수량"].clip(lower=0)).sum() / max(float(g["필요수량"].clip(lower=0).sum()), 1.0)),
-                            }
-                        )
-                    )
+                    proc.groupby(["날짜_date", "공장그룹", "공장", "공정"], dropna=False)[
+                        [c for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량", "생산SKU수", "필요SKU수", "규격대응SKU수"] if c in proc.columns]
+                    ]
+                    .sum()
                     .reset_index()
                 )
+                # 공장별 요약에서도 동일 지표/점수 재계산
+                summary["규격대응률(%)"] = np.where(
+                    pd.to_numeric(summary.get("생산SKU수", 0), errors="coerce").fillna(0) > 0,
+                    pd.to_numeric(summary.get("규격대응SKU수", 0), errors="coerce").fillna(0) / pd.to_numeric(summary.get("생산SKU수", 0), errors="coerce").fillna(0) * 100,
+                    0.0,
+                )
+                summary["정확대응비중(%)"] = np.where(
+                    pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0) > 0,
+                    pd.to_numeric(summary.get("유효생산량", 0), errors="coerce").fillna(0) / pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0) * 100,
+                    0.0,
+                )
+                summary["초과생산비중(%)"] = np.where(
+                    pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0) > 0,
+                    pd.to_numeric(summary.get("과생산량", 0), errors="coerce").fillna(0) / pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0) * 100,
+                    0.0,
+                )
+                summary["비정형생산비중(%)"] = np.where(
+                    pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0) > 0,
+                    pd.to_numeric(summary.get("불필요생산량", 0), errors="coerce").fillna(0) / pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0) * 100,
+                    0.0,
+                )
+                summary["규격대응률(%)"] = pd.to_numeric(summary["규격대응률(%)"], errors="coerce").fillna(0).clip(0, 100)
+                summary["정확대응비중(%)"] = pd.to_numeric(summary["정확대응비중(%)"], errors="coerce").fillna(0).clip(0, 100)
+                summary["초과생산비중(%)"] = pd.to_numeric(summary["초과생산비중(%)"], errors="coerce").fillna(0).clip(0, 300)
+                summary["비정형생산비중(%)"] = pd.to_numeric(summary["비정형생산비중(%)"], errors="coerce").fillna(0).clip(0, 300)
+                summary["공정점수"] = (
+                    summary["규격대응률(%)"] * 0.25
+                    + summary["정확대응비중(%)"] * 0.45
+                    + (100 - summary["초과생산비중(%)"].clip(0, 100)) * 0.20
+                    + (100 - summary["비정형생산비중(%)"].clip(0, 100)) * 0.10
+                ).clip(0, 100)
                 summary["상태"] = np.select(
-                    [
-                        summary["공정점수"] >= 90,
-                        summary["공정점수"] >= 80,
-                        summary["공정점수"] >= 70,
-                    ],
+                    [summary["공정점수"] >= 90, summary["공정점수"] >= 80, summary["공정점수"] >= 70],
                     ["양호", "주의", "경고"],
                     default="위험",
                 )
@@ -2597,9 +2671,10 @@ try:
                         "공장",
                         "공정",
                         "실적수량",
-                        "부족수량",
-                        "과생산수량",
-                        "필요수량",
+                        "규격대응률(%)",
+                        "정확대응비중(%)",
+                        "초과생산비중(%)",
+                        "비정형생산비중(%)",
                         "공정점수",
                         "상태",
                     ]
@@ -2608,44 +2683,20 @@ try:
                 st.dataframe(summary[summary_show_cols] if summary_show_cols else summary, use_container_width=True, height=420)
 
                 st.markdown("#### 상세 테이블")
-                if (not result2_candidates) or (process_detail is None) or (len(process_detail) == 0):
-                    st.info("`매칭결과` 시트가 없거나 데이터가 없습니다. (상세 테이블을 표시할 수 없습니다)")
-                else:
-                    det = process_detail.copy()
-                    if "공정" in det.columns:
-                        det["공정"] = det["공정"].replace({"최종공정": "누수규격"})
-                    if "날짜_date" in det.columns:
-                        det = det[(det["날짜_date"] >= start_date) & (det["날짜_date"] <= end_date) & (det["날짜_date"] != today)].copy()
-                    if "공정" in det.columns:
-                        det = det[det["공정"].isin(target_order_raw)].copy()
-                        det["공정"] = det["공정"].replace({"누수규격": "최종공정"})
-                    if "제품코드" in det.columns and "제품명" not in det.columns:
-                        det["제품명"] = det["제품코드"].astype(str)
-
-                    if "공장" in det.columns:
-                        det["공장그룹"] = np.select(
-                            [
-                                det["공장"].astype(str).str.contains("A관", na=False),
-                                det["공장"].astype(str).str.contains("C관", na=False),
-                                det["공장"].astype(str).str.contains("S관", na=False),
-                            ],
-                            ["A관", "C관", "S관"],
-                            default="기타",
-                        )
-                    else:
-                        det["공장그룹"] = "기타"
-                    det["공장그룹"] = pd.Categorical(det["공장그룹"], categories=factory_order + ["기타"], ordered=True)
-                    det["공정"] = pd.Categorical(det["공정"], categories=target_order, ordered=True) if "공정" in det.columns else det.get("공정")
-
-                    show_cols = [
-                        c
-                        for c in ["날짜_date", "공장", "공정", "신규분류요약", "제품명", "실적수량", "부족수량", "과생산량", "불필요생산량"]
-                        if c in det.columns
-                    ]
-                    det_show = det[show_cols].copy() if show_cols else det.copy()
-                    sort_cols = [c for c in ["날짜_date", "공장그룹", "공장", "공정", "신규분류요약", "제품명"] if c in det_show.columns]
-                    det_show = det_show.sort_values(sort_cols, ascending=[True] * len(sort_cols)) if sort_cols else det_show
-                    st.dataframe(det_show, use_container_width=True, height=520)
+                det_show = det.copy()
+                show_cols = [
+                    c
+                    for c in ["날짜_date", "공장", "공정", "신규분류요약", "제품명", "실적수량", "필요수량", "부족수량", "유효생산량", "과생산량", "불필요생산량"]
+                    if c in det_show.columns
+                ]
+                det_show = det_show[show_cols].copy() if show_cols else det_show
+                if "공정" in det_show.columns:
+                    det_show["공정"] = pd.Categorical(det_show["공정"], categories=target_order, ordered=True)
+                if "공장그룹" in det_show.columns:
+                    det_show["공장그룹"] = pd.Categorical(det_show["공장그룹"], categories=factory_order + ["기타"], ordered=True)
+                sort_cols = [c for c in ["날짜_date", "공장그룹", "공장", "공정", "신규분류요약", "제품명"] if c in det_show.columns]
+                det_show = det_show.sort_values(sort_cols, ascending=[True] * len(sort_cols)) if sort_cols else det_show
+                st.dataframe(det_show, use_container_width=True, height=520)
 except Exception as e:
     st.error(f"❌ 오류가 발생했습니다: {str(e)}")
     st.info("결과 파일을 다시 생성해주세요.")
