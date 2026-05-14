@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import io
 from xlsxwriter.utility import xl_rowcol_to_cell
+import textwrap
 
 
 def _safe_sheet_name(name: str) -> str:
@@ -1304,67 +1305,80 @@ def load_process_balance_detail_excels(
     return out.reset_index(drop=True), has_any_sheet
 
 
+def _truncate_err_message(msg: str, *, max_chars: int = 600) -> str:
+    msg = str(msg or "")
+    msg = " ".join(msg.split())
+    if len(msg) <= max_chars:
+        return msg
+    return textwrap.shorten(msg, width=max_chars, placeholder=" …(truncated)")
+
+
 # 결과 파일 선택(월별 분리 저장 지원)
-BASE_PATH = os.path.dirname(os.path.abspath(__file__))
-base_dir = Path(BASE_PATH)
+try:
+    BASE_PATH = os.path.dirname(os.path.abspath(__file__))
+    base_dir = Path(BASE_PATH)
 
-# 결과 파일이 repo 루트뿐 아니라 `outputs/` 아래에 저장되는 경우도 있어 함께 검색합니다.
-search_dirs = [base_dir, base_dir / "outputs", base_dir / "outputs" / "archive"]
-_cands: list[Path] = []
-for d in search_dirs:
-    if not d.exists():
-        continue
-    _cands.extend(
-        [
-            p
-            for p in d.glob("유효생산량_결과*.xlsx")
-            if (not p.name.startswith("~$")) and (not p.name.startswith("유효생산량_결과2"))
-        ]
+    # 결과 파일이 repo 루트뿐 아니라 `outputs/` 아래에 저장되는 경우도 있어 함께 검색합니다.
+    search_dirs = [base_dir, base_dir / "outputs", base_dir / "outputs" / "archive"]
+    _cands: list[Path] = []
+    for d in search_dirs:
+        if not d.exists():
+            continue
+        _cands.extend(
+            [
+                p
+                for p in d.glob("유효생산량_결과*.xlsx")
+                if (not p.name.startswith("~$")) and (not p.name.startswith("유효생산량_결과2"))
+            ]
+        )
+
+    _seen: set[str] = set()
+    result_candidates: list[Path] = []
+    for p in _cands:
+        rp = str(p.resolve())
+        if rp in _seen:
+            continue
+        _seen.add(rp)
+        result_candidates.append(p)
+
+    result_candidates = sorted(
+        result_candidates,
+        key=lambda p: p.stat().st_mtime_ns if p.exists() else 0,
+        reverse=True,
     )
+    if not result_candidates:
+        st.error(
+            "⚠️ 결과 파일을 찾을 수 없습니다. 검색 경로: "
+            + ", ".join(str(d) for d in search_dirs)
+        )
+        st.info("전처리 완료된 결과 파일(`유효생산량_결과*.xlsx`)을 repo 루트 또는 `outputs/`에 넣어주세요.")
+        st.stop()
 
-_seen: set[str] = set()
-result_candidates: list[Path] = []
-for p in _cands:
-    rp = str(p.resolve())
-    if rp in _seen:
-        continue
-    _seen.add(rp)
-    result_candidates.append(p)
+    # 공정 밸런스용 결과2 파일(전공정) 후보 검색
+    _cands2: list[Path] = []
+    for d in search_dirs:
+        if not d.exists():
+            continue
+        _cands2.extend([p for p in d.glob("유효생산량_결과2*.xlsx") if not p.name.startswith("~$")])
 
-result_candidates = sorted(
-    result_candidates,
-    key=lambda p: p.stat().st_mtime_ns if p.exists() else 0,
-    reverse=True,
-)
-if not result_candidates:
-    st.error(
-        "⚠️ 결과 파일을 찾을 수 없습니다. 검색 경로: "
-        + ", ".join(str(d) for d in search_dirs)
+    _seen2: set[str] = set()
+    result2_candidates: list[Path] = []
+    for p in _cands2:
+        rp = str(p.resolve())
+        if rp in _seen2:
+            continue
+        _seen2.add(rp)
+        result2_candidates.append(p)
+
+    result2_candidates = sorted(
+        result2_candidates,
+        key=lambda p: p.stat().st_mtime_ns if p.exists() else 0,
+        reverse=True,
     )
-    st.info("전처리 완료된 결과 파일(`유효생산량_결과*.xlsx`)을 repo 루트 또는 `outputs/`에 넣어주세요.")
+except Exception as e:
+    st.error("❌ 초기화(파일 검색) 중 오류가 발생했습니다.")
+    st.code(_truncate_err_message(str(e)), language="text")
     st.stop()
-
-# 공정 밸런스용 결과2 파일(전공정) 후보 검색
-_cands2: list[Path] = []
-for d in search_dirs:
-    if not d.exists():
-        continue
-    _cands2.extend([p for p in d.glob("유효생산량_결과2*.xlsx") if not p.name.startswith("~$")])
-
-_seen2: set[str] = set()
-result2_candidates: list[Path] = []
-for p in _cands2:
-    rp = str(p.resolve())
-    if rp in _seen2:
-        continue
-    _seen2.add(rp)
-    result2_candidates.append(p)
-
-result2_candidates = sorted(
-    result2_candidates,
-    key=lambda p: p.stat().st_mtime_ns if p.exists() else 0,
-    reverse=True,
-)
 
 try:
     # 최신 파일이 월별로 분리되어 저장될 수 있어, 후보 파일들을 합쳐서 사용
@@ -2831,5 +2845,6 @@ try:
                 det_show = det_show.sort_values(sort_cols, ascending=[True] * len(sort_cols)) if sort_cols else det_show
                 st.dataframe(det_show, use_container_width=True, height=520)
 except Exception as e:
-    st.error(f"❌ 오류가 발생했습니다: {str(e)}")
+    st.error("❌ 오류가 발생했습니다.")
+    st.code(_truncate_err_message(str(e)), language="text")
     st.info("결과 파일을 다시 생성해주세요.")
