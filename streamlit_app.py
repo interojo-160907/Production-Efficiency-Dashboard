@@ -2627,7 +2627,7 @@ try:
                         )
                         fig_factory.update_traces(
                             marker=dict(cornerradius=18),
-                            hovertemplate="공장=%{x}<br>종합점수=%{y:.1f}%<extra></extra>",
+                            hovertemplate="공장=%{x}<br>종합점수=%{y:.1f}<extra></extra>",
                         )
                         # 막대 끝에 '둥근' 배지(Scatter rounded square)로 수치 표시
                         try:
@@ -2640,9 +2640,9 @@ try:
                                     x=xs,
                                     y=ys,
                                     mode="markers+text",
-                                    text=[f"{v:.1f}%" for v in ys],
+                                    text=[f"{v:.1f}" for v in ys],
                                     textposition="top center",
-                                    textfont=dict(size=16, color="#111827"),
+                                    textfont=dict(size=26, family="Arial", color="#111827"),
                                     marker=dict(
                                         symbol="square-rounded",
                                         size=38,
@@ -2655,14 +2655,14 @@ try:
                             )
                             fig_factory.update_traces(selector=dict(type="scatter"), cliponaxis=False)
                         except Exception:
-                            fig_factory.update_traces(texttemplate="%{y:.1f}%", textposition="outside", cliponaxis=False)
+                            fig_factory.update_traces(texttemplate="%{y:.1f}", textposition="outside", cliponaxis=False)
 
                         fig_factory.update_layout(
                             height=chart_height,
                             margin=dict(l=10, r=10, t=10, b=10),
                             showlegend=False,
                             xaxis_title="공장",
-                            yaxis_title="점수(%)",
+                            yaxis_title="점수(0-100)",
                         )
                         st.plotly_chart(fig_factory, use_container_width=True)
 
@@ -2696,27 +2696,36 @@ try:
                             text="평균점수",
                             color_discrete_map=proc_color_map,
                         )
-                        fig_fac.update_traces(marker=dict(cornerradius=14), texttemplate="%{text:.1f}", textposition="outside", cliponaxis=False)
+                        fig_fac.update_traces(
+                            marker=dict(cornerradius=14),
+                            texttemplate="<b>%{text:.1f}</b>",
+                            textposition="outside",
+                            textfont=dict(size=22, family="Arial", color="#111827"),
+                            cliponaxis=False,
+                        )
                         fig_fac.update_layout(
                             height=chart_height,
-                            margin=dict(l=130, r=10, t=30, b=10),
+                            margin=dict(l=185, r=10, t=30, b=10),
                             showlegend=True,
                             xaxis_title="공정",
-                            yaxis_title="점수(%)",
+                            yaxis_title=None,
                             legend_title_text="공정",
+                            uniformtext_minsize=18,
+                            uniformtext_mode="hide",
                         )
                         # facet 라벨을 왼쪽에 보이도록 위치/텍스트 보정
                         for ann in fig_fac.layout.annotations:
                             if isinstance(ann.text, str) and "공장그룹=" in ann.text:
                                 raw = ann.text.replace("공장그룹=", "")
                                 ann.text = factory_display.get(raw, raw)
-                                ann.x = -0.12
+                                ann.x = -0.14
                                 ann.xanchor = "left"
                                 ann.yanchor = "middle"
-                        # y축 제목이 패널마다 반복되지 않도록(첫 패널만 표시)
-                        fig_fac.update_yaxes(title_text="점수(%)", row=1, col=1)
-                        fig_fac.update_yaxes(title_text="", row=2, col=1)
-                        fig_fac.update_yaxes(title_text="", row=3, col=1)
+                                ann.textangle = 0
+                                ann.font = dict(size=18, family="Arial", color="#111827")
+                        # y축 제목은 제거하고(기울어진 텍스트), tick/격자만 유지
+                        fig_fac.update_yaxes(title_text="", tickfont=dict(size=14, family="Arial", color="#111827"))
+                        fig_fac.update_xaxes(tickfont=dict(size=18, family="Arial", color="#111827"), title_font=dict(size=18, family="Arial", color="#111827"))
                         # 구분선(패널 사이)
                         fig_fac.add_shape(type="line", xref="paper", yref="paper", x0=0, x1=1, y0=2/3, y1=2/3, line=dict(color="#E5E7EB", width=2))
                         fig_fac.add_shape(type="line", xref="paper", yref="paper", x0=0, x1=1, y0=1/3, y1=1/3, line=dict(color="#E5E7EB", width=2))
