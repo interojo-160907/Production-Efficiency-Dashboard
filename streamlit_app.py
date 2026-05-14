@@ -2722,6 +2722,8 @@ try:
                 if len(proc_acs) == 0:
                     st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
                 else:
+                    from plotly.subplots import make_subplots
+
                     qty_cols = [c for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량"] if c in proc_acs.columns]
                     comp = proc_acs.groupby("공장그룹", dropna=False)[qty_cols].sum().reset_index() if qty_cols else pd.DataFrame()
                     for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량"]:
@@ -2824,59 +2826,85 @@ try:
                     # 공정별 도넛(관별 컬럼 하단에 5개씩)
                     show_by_proc = st.toggle("공정별로 보기", value=True)
                     if show_by_proc:
+                        # 공정별 집계는 1회만 수행 (15개 차트를 개별 생성하지 않고, 관별로 1개 Figure에 5개 파이를 배치)
+                        proc_qty_cols = [c for c in ["실적수량", "과생산량", "불필요생산량"] if c in proc_acs.columns]
+                        proc_comp = (
+                            proc_acs.groupby(["공장그룹", "공정"], dropna=False)[proc_qty_cols].sum().reset_index()
+                            if proc_qty_cols else pd.DataFrame(columns=["공장그룹", "공정"])
+                        )
+                        for c in ["실적수량", "과생산량", "불필요생산량"]:
+                            if c in proc_comp.columns:
+                                proc_comp[c] = pd.to_numeric(proc_comp[c], errors="coerce").fillna(0)
+                            else:
+                                proc_comp[c] = 0.0
+
+                        proc_comp["초과(%)"] = np.where(proc_comp["실적수량"] > 0, proc_comp["과생산량"] / proc_comp["실적수량"] * 100, 0.0)
+                        proc_comp["비정형(%)"] = np.where(proc_comp["실적수량"] > 0, proc_comp["불필요생산량"] / proc_comp["실적수량"] * 100, 0.0)
+                        proc_comp["초과(%)"] = pd.to_numeric(proc_comp["초과(%)"], errors="coerce").fillna(0).clip(0, 100)
+                        proc_comp["비정형(%)"] = pd.to_numeric(proc_comp["비정형(%)"], errors="coerce").fillna(0).clip(0, 100)
+
+                        def _build_proc_pies_for_group(group_name: str) -> go.Figure:
+                            sub = proc_comp[proc_comp["공장그룹"].astype(str) == str(group_name)].copy()
+                            if "공정" in sub.columns:
+                                sub["공정"] = pd.Categorical(sub["공정"], categories=target_order, ordered=True)
+                                sub = sub.sort_values("공정")
+
+                            fig = make_subplots(rows=1, cols=5, specs=[[{"type": "domain"}] * 5])
+                            for i, proc_name in enumerate(target_order, start=1):
+                                r = sub[sub["공정"].astype(str) == str(proc_name)]
+                                if len(r) == 0:
+                                    over_pct = 0.0
+                                    waste_pct = 0.0
+                                else:
+                                    over_pct = float(r.iloc[0].get("초과(%)", 0.0))
+                                    waste_pct = float(r.iloc[0].get("비정형(%)", 0.0))
+                                denom = over_pct + waste_pct
+                                over_share = (over_pct / denom * 100.0) if denom > 0 else 0.0
+                                waste_share = (waste_pct / denom * 100.0) if denom > 0 else 0.0
+
+                                fig.add_trace(
+                                    go.Pie(
+                                        labels=["초과", "비정형"],
+                                        values=[over_share, waste_share],
+                                        sort=False,
+                                        direction="clockwise",
+                                        marker=dict(colors=[donut_colors["초과"], donut_colors["비정형"]]),
+                                        textinfo="none",
+                                        texttemplate="%{percent:.0%}",
+                                        textposition="inside",
+                                        insidetextorientation="horizontal",
+                                        textfont=dict(size=12, family="Arial", color="#111827"),
+                                        hovertemplate="%{label}<br>비중=%{percent}<br>실적대비=%{customdata:.1f}%<extra></extra>",
+                                        customdata=[over_pct, waste_pct],
+                                    ),
+                                    row=1,
+                                    col=i,
+                                )
+                                # 각 파이 상단 공정명(잘림 방지 위해 annotation으로 배치)
+                                fig.add_annotation(
+                                    text=str(proc_name),
+                                    x=fig.layout[f"xaxis{i}"].domain[0] + (fig.layout[f"xaxis{i}"].domain[1] - fig.layout[f"xaxis{i}"].domain[0]) / 2,
+                                    y=1.10,
+                                    xref="paper",
+                                    yref="paper",
+                                    showarrow=False,
+                                    font=dict(size=12, family="Arial", color="#6B7280"),
+                                )
+
+                            fig.update_layout(
+                                height=180,
+                                margin=dict(l=4, r=4, t=22, b=6),
+                                showlegend=False,
+                                uniformtext_minsize=10,
+                                uniformtext_mode="hide",
+                            )
+                            return fig
+
                         for idx, g in enumerate(factory_order):
                             with donut_cols[idx]:
-                                st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
-                                proc_cols = st.columns(5, gap="small")
-
-                                for j, proc_name in enumerate(target_order):
-                                    sub = proc_acs[(proc_acs["공장그룹"].astype(str) == str(g)) & (proc_acs["공정"].astype(str) == str(proc_name))].copy()
-                                    if len(sub) == 0:
-                                        with proc_cols[j]:
-                                            st.caption(proc_name)
-                                            st.caption("데이터 없음")
-                                        continue
-
-                                    total_qty = float(pd.to_numeric(sub.get("실적수량", 0), errors="coerce").fillna(0).sum())
-                                    over_qty = float(pd.to_numeric(sub.get("과생산량", 0), errors="coerce").fillna(0).sum())
-                                    waste_qty = float(pd.to_numeric(sub.get("불필요생산량", 0), errors="coerce").fillna(0).sum())
-
-                                    over_pct = (over_qty / total_qty * 100.0) if total_qty > 0 else 0.0
-                                    waste_pct = (waste_qty / total_qty * 100.0) if total_qty > 0 else 0.0
-                                    over_pct = float(np.clip(over_pct, 0, 100))
-                                    waste_pct = float(np.clip(waste_pct, 0, 100))
-                                    denom = over_pct + waste_pct
-                                    over_share = (over_pct / denom * 100.0) if denom > 0 else 0.0
-                                    waste_share = (waste_pct / denom * 100.0) if denom > 0 else 0.0
-
-                                    fig_small = go.Figure(
-                                        data=[
-                                            go.Pie(
-                                                labels=["초과", "비정형"],
-                                                values=[over_share, waste_share],
-                                                hole=0.0,
-                                                sort=False,
-                                                direction="clockwise",
-                                                marker=dict(colors=[donut_colors["초과"], donut_colors["비정형"]]),
-                                                textinfo="none",
-                                                texttemplate="%{percent:.0%}",
-                                                textposition="inside",
-                                                insidetextorientation="horizontal",
-                                                textfont=dict(size=12, family="Arial", color="#111827"),
-                                                hovertemplate="%{label}<br>비중=%{percent}<br>실적대비=%{customdata:.1f}%<extra></extra>",
-                                                customdata=[over_pct, waste_pct],
-                                            )
-                                        ]
-                                    )
-                                    fig_small.update_layout(
-                                        height=150,
-                                        margin=dict(l=0, r=0, t=10, b=10),
-                                        showlegend=False,
-                                    )
-
-                                    with proc_cols[j]:
-                                        st.caption(proc_name)
-                                        st.plotly_chart(fig_small, use_container_width=True)
+                                st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+                                fig_grid = _build_proc_pies_for_group(str(g))
+                                st.plotly_chart(fig_grid, use_container_width=True)
 
                 st.markdown("#### 공장별 요약")
                 summary = (
