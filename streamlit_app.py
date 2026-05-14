@@ -2823,86 +2823,90 @@ try:
                         with donut_cols[idx]:
                             st.plotly_chart(fig_donut, use_container_width=True)
 
-                    # 공정별 도넛(관별 컬럼 하단에 5개씩)
-                    show_by_proc = st.toggle("공정별로 보기", value=True)
-                    if show_by_proc:
-                        # 공정별은 "정확대응 vs (초과+비정형)" 100% 누적 가로 막대로 표현(비중)
-                        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-                        proc_qty_cols = [c for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량"] if c in proc_acs.columns]
-                        proc_comp = (
-                            proc_acs.groupby(["공장그룹", "공정"], dropna=False)[proc_qty_cols].sum().reset_index()
-                            if proc_qty_cols else pd.DataFrame(columns=["공장그룹", "공정"])
-                        )
-                        for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량"]:
-                            if c in proc_comp.columns:
-                                proc_comp[c] = pd.to_numeric(proc_comp[c], errors="coerce").fillna(0)
-                            else:
-                                proc_comp[c] = 0.0
+                    # 공정별은 "정확대응 vs (초과+비정형)" 100% 누적 가로 막대로 표현(비중)
+                    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+                    st.markdown(
+                        "<div style='display:flex; gap:16px; align-items:center; margin:6px 0 8px 0; flex-wrap:wrap;'>"
+                        "<div style='display:flex; align-items:center; gap:8px;'><span style='width:12px; height:12px; border-radius:3px; background:#38BDF8; display:inline-block;'></span><b>정확</b></div>"
+                        "<div style='display:flex; align-items:center; gap:8px;'><span style='width:12px; height:12px; border-radius:3px; background:#EF4444; display:inline-block;'></span><b>초과+비정형</b></div>"
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+                    proc_qty_cols = [c for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량"] if c in proc_acs.columns]
+                    proc_comp = (
+                        proc_acs.groupby(["공장그룹", "공정"], dropna=False)[proc_qty_cols].sum().reset_index()
+                        if proc_qty_cols else pd.DataFrame(columns=["공장그룹", "공정"])
+                    )
+                    for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량"]:
+                        if c in proc_comp.columns:
+                            proc_comp[c] = pd.to_numeric(proc_comp[c], errors="coerce").fillna(0)
+                        else:
+                            proc_comp[c] = 0.0
 
-                        proc_comp["정확(%)"] = np.where(proc_comp["실적수량"] > 0, proc_comp["유효생산량"] / proc_comp["실적수량"] * 100, 0.0)
-                        proc_comp["감점요인(%)"] = np.where(
-                            proc_comp["실적수량"] > 0,
-                            (proc_comp["과생산량"] + proc_comp["불필요생산량"]) / proc_comp["실적수량"] * 100,
-                            0.0,
-                        )
-                        proc_comp["정확(%)"] = pd.to_numeric(proc_comp["정확(%)"], errors="coerce").fillna(0).clip(0, 100)
-                        proc_comp["감점요인(%)"] = pd.to_numeric(proc_comp["감점요인(%)"], errors="coerce").fillna(0).clip(0, 100)
-                        # 100%로 정규화(잔여는 정확으로 흡수)
-                        proc_comp["감점요인(%)"] = np.minimum(proc_comp["감점요인(%)"], 100.0)
-                        proc_comp["정확(%)"] = (100.0 - proc_comp["감점요인(%)"]).clip(0, 100)
+                    proc_comp["정확(%)"] = np.where(proc_comp["실적수량"] > 0, proc_comp["유효생산량"] / proc_comp["실적수량"] * 100, 0.0)
+                    proc_comp["초과+비정형(%)"] = np.where(
+                        proc_comp["실적수량"] > 0,
+                        (proc_comp["과생산량"] + proc_comp["불필요생산량"]) / proc_comp["실적수량"] * 100,
+                        0.0,
+                    )
+                    proc_comp["정확(%)"] = pd.to_numeric(proc_comp["정확(%)"], errors="coerce").fillna(0).clip(0, 100)
+                    proc_comp["초과+비정형(%)"] = pd.to_numeric(proc_comp["초과+비정형(%)"], errors="coerce").fillna(0).clip(0, 100)
+                    # 100%로 정규화(잔여는 정확으로 흡수)
+                    proc_comp["초과+비정형(%)"] = np.minimum(proc_comp["초과+비정형(%)"], 100.0)
+                    proc_comp["정확(%)"] = (100.0 - proc_comp["초과+비정형(%)"]).clip(0, 100)
 
-                        proc_comp["공정"] = pd.Categorical(proc_comp["공정"].astype(str), categories=target_order, ordered=True)
-                        proc_comp = proc_comp[proc_comp["공정"].notna()].copy()
-                        proc_comp = proc_comp.sort_values("공정")
+                    proc_comp["공정"] = pd.Categorical(proc_comp["공정"].astype(str), categories=target_order, ordered=True)
+                    proc_comp = proc_comp[proc_comp["공정"].notna()].copy()
+                    proc_comp = proc_comp.sort_values("공정")
 
-                        bar_colors = {"정확": "#38BDF8", "감점요인": "#EF4444"}
-                        for idx, g in enumerate(factory_order):
-                            with donut_cols[idx]:
-                                sub = proc_comp[proc_comp["공장그룹"].astype(str) == str(g)].copy()
-                                if len(sub) == 0:
-                                    st.info("공정별 데이터 없음")
-                                    continue
+                    bar_colors = {"정확": "#38BDF8", "초과+비정형": "#EF4444"}
+                    for idx, g in enumerate(factory_order):
+                        with donut_cols[idx]:
+                            sub = proc_comp[proc_comp["공장그룹"].astype(str) == str(g)].copy()
+                            if len(sub) == 0:
+                                st.info("공정별 데이터 없음")
+                                continue
 
-                                base = sub[["공정", "정확(%)", "감점요인(%)"]].copy()
-                                base["공정"] = base["공정"].astype(str)
-                                long_df = pd.concat(
-                                    [
-                                        base.rename(columns={"정확(%)": "비중"})
-                                        .assign(구분="정확")[["공정", "구분", "비중"]],
-                                        base.rename(columns={"감점요인(%)": "비중"})
-                                        .assign(구분="감점요인")[["공정", "구분", "비중"]],
-                                    ],
-                                    ignore_index=True,
-                                )
-                                fig_bar = px.bar(
-                                    long_df,
-                                    y="공정",
-                                    x="비중",
-                                    color="구분",
-                                    orientation="h",
-                                    barmode="stack",
-                                    category_orders={"공정": target_order, "구분": ["정확", "감점요인"]},
-                                    color_discrete_map=bar_colors,
-                                    text="비중",
-                                )
-                                fig_bar.update_traces(
-                                    texttemplate="%{x:.0f}%",
-                                    textposition="inside",
-                                    insidetextanchor="middle",
-                                    textfont=dict(size=14, family="Arial", color="#0B1220"),
-                                    cliponaxis=False,
-                                    hovertemplate="%{y}<br>%{legendgroup}=%{x:.1f}%<extra></extra>",
-                                )
-                                fig_bar.update_layout(
-                                    height=240,
-                                    margin=dict(l=0, r=0, t=10, b=10),
-                                    showlegend=False,
-                                    xaxis=dict(range=[0, 100], visible=False),
-                                    yaxis=dict(title=None, tickfont=dict(size=13, family="Arial", color="#111827")),
-                                    uniformtext_minsize=12,
-                                    uniformtext_mode="hide",
-                                )
-                                st.plotly_chart(fig_bar, use_container_width=True)
+                            base = sub[["공정", "정확(%)", "초과+비정형(%)"]].copy()
+                            base["공정"] = base["공정"].astype(str)
+                            long_df = pd.concat(
+                                [
+                                    base.rename(columns={"정확(%)": "비중"})
+                                    .assign(구분="정확")[["공정", "구분", "비중"]],
+                                    base.rename(columns={"초과+비정형(%)": "비중"})
+                                    .assign(구분="초과+비정형")[["공정", "구분", "비중"]],
+                                ],
+                                ignore_index=True,
+                            )
+                            fig_bar = px.bar(
+                                long_df,
+                                y="공정",
+                                x="비중",
+                                color="구분",
+                                orientation="h",
+                                barmode="stack",
+                                category_orders={"공정": target_order, "구분": ["정확", "초과+비정형"]},
+                                color_discrete_map=bar_colors,
+                                text="비중",
+                            )
+                            fig_bar.update_traces(
+                                texttemplate="%{x:.0f}%",
+                                textposition="inside",
+                                insidetextanchor="middle",
+                                textfont=dict(size=14, family="Arial", color="#0B1220"),
+                                cliponaxis=False,
+                                hovertemplate="%{y}<br>%{legendgroup}=%{x:.1f}%<extra></extra>",
+                            )
+                            fig_bar.update_layout(
+                                height=240,
+                                margin=dict(l=0, r=0, t=10, b=10),
+                                showlegend=False,
+                                xaxis=dict(range=[0, 100], visible=False),
+                                yaxis=dict(title=None, tickfont=dict(size=13, family="Arial", color="#111827")),
+                                uniformtext_minsize=12,
+                                uniformtext_mode="hide",
+                            )
+                            st.plotly_chart(fig_bar, use_container_width=True)
 
                 st.markdown("#### 공장별 요약")
                 summary = (
