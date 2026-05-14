@@ -2535,99 +2535,146 @@ try:
 
                 proc_acs = proc[proc["공장그룹"].isin(factory_order)].copy()
 
-                st.markdown("#### 공장별 종합 점수 (A/C/S관)")
-                if len(proc_acs) == 0:
-                    st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
-                else:
-                    factory_display = {"A관": "A관(1공장)", "C관": "C관(2공장)", "S관": "S관(3공장)"}
-                    by_factory = (
-                        proc_acs.groupby("공장그룹", dropna=False)
-                        .apply(
-                            lambda g: (g["공정점수"] * pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0)).sum()
-                            / max(float(pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0).sum()), 1.0)
+                # 공장별(좌) + 공정별(우) 한 행 배치
+                c_left, c_right = st.columns([1, 2], gap="large")
+
+                proc_color_map = {
+                    "사출": "#2563EB",
+                    "분리": "#06B6D4",
+                    "하드레이션": "#10B981",
+                    "접착": "#F59E0B",
+                    "누수규격": "#EF4444",
+                }
+                factory_display = {"A관": "A관(1공장)", "C관": "C관(2공장)", "S관": "S관(3공장)"}
+                chart_height = 520
+
+                with c_left:
+                    st.markdown("#### 공장별 종합 점수 (A/C/S관)")
+                    if len(proc_acs) == 0:
+                        st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
+                    else:
+                        by_factory = (
+                            proc_acs.groupby("공장그룹", dropna=False)
+                            .apply(
+                                lambda g: (g["공정점수"] * pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0)).sum()
+                                / max(float(pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0).sum()), 1.0)
+                            )
+                            .rename("종합점수")
+                            .reset_index()
                         )
-                        .rename("종합점수")
-                        .reset_index()
-                    )
-                    by_factory["공장그룹"] = pd.Categorical(by_factory["공장그룹"], categories=factory_order, ordered=True)
-                    by_factory = by_factory.sort_values("공장그룹")
-                    by_factory["공장"] = by_factory["공장그룹"].astype(str).map(factory_display)
+                        by_factory["공장그룹"] = pd.Categorical(by_factory["공장그룹"], categories=factory_order, ordered=True)
+                        by_factory = by_factory.sort_values("공장그룹")
+                        by_factory["공장"] = by_factory["공장그룹"].astype(str).map(factory_display)
 
-                    fig_factory = px.bar(
-                        by_factory,
-                        x="공장",
-                        y="종합점수",
-                        text="종합점수",
-                        range_y=[0, 100],
-                        category_orders={"공장": [factory_display[k] for k in factory_order]},
-                        color="공장",
-                        color_discrete_map={
-                            factory_display["A관"]: "#0B62F1",
-                            factory_display["C관"]: "#7CC2FF",
-                            factory_display["S관"]: "#FF2D2D",
-                        },
-                    )
-                    fig_factory.update_traces(texttemplate="%{text:.1f}", textposition="outside", cliponaxis=False, hovertemplate="공장=%{x}<br>종합점수=%{y:.1f}점<extra></extra>")
-                    fig_factory.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10), showlegend=False, xaxis_title="공장", yaxis_title="점수")
-                    st.plotly_chart(fig_factory, use_container_width=True)
+                        fig_factory = px.bar(
+                            by_factory,
+                            x="공장",
+                            y="종합점수",
+                            range_y=[0, 100],
+                            category_orders={"공장": [factory_display[k] for k in factory_order]},
+                            color="공장",
+                            color_discrete_map={
+                                factory_display["A관"]: "#0B62F1",
+                                factory_display["C관"]: "#7CC2FF",
+                                factory_display["S관"]: "#FF2D2D",
+                            },
+                        )
+                        fig_factory.update_traces(
+                            marker=dict(cornerradius=18),
+                            hovertemplate="공장=%{x}<br>종합점수=%{y:.1f}%<extra></extra>",
+                        )
+                        # 막대 끝에 '둥근' 배지(Scatter rounded square)로 수치 표시
+                        try:
+                            import plotly.graph_objects as go
 
-                st.markdown("#### 공장별 공정 평균 점수 (A/C/S관)")
-                if len(proc_acs) == 0:
-                    st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
-                else:
-                    proc_color_map = {
-                        "사출": "#2563EB",
-                        "분리": "#06B6D4",
-                        "하드레이션": "#10B981",
-                        "접착": "#F59E0B",
-                        "누수규격": "#EF4444",
-                    }
-                    by_fac_proc = (
-                        proc_acs.groupby(["공장그룹", "공정"], dropna=False)
-                        .apply(lambda g: (g["공정점수"] * pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0)).sum() / max(float(pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0).sum()), 1.0))
-                        .rename("평균점수")
-                        .reset_index()
-                    )
-                    by_fac_proc["평균점수"] = pd.to_numeric(by_fac_proc["평균점수"], errors="coerce").fillna(0)
-                    by_fac_proc["공정"] = pd.Categorical(by_fac_proc["공정"], categories=target_order, ordered=True)
-                    by_fac_proc = by_fac_proc.sort_values(["공장그룹", "공정"])
+                            xs = by_factory["공장"].tolist()
+                            ys = by_factory["종합점수"].astype(float).tolist()
+                            fig_factory.add_trace(
+                                go.Scatter(
+                                    x=xs,
+                                    y=ys,
+                                    mode="markers+text",
+                                    text=[f"{v:.1f}%" for v in ys],
+                                    textposition="top center",
+                                    textfont=dict(size=16, color="#111827"),
+                                    marker=dict(
+                                        symbol="square-rounded",
+                                        size=38,
+                                        color="rgba(255,255,255,0.92)",
+                                        line=dict(color="rgba(17,24,39,0.12)", width=1),
+                                    ),
+                                    hoverinfo="skip",
+                                    showlegend=False,
+                                )
+                            )
+                            fig_factory.update_traces(selector=dict(type="scatter"), cliponaxis=False)
+                        except Exception:
+                            fig_factory.update_traces(texttemplate="%{y:.1f}%", textposition="outside", cliponaxis=False)
 
-                    fig_fac = px.bar(
-                        by_fac_proc,
-                        x="공정",
-                        y="평균점수",
-                        color="공정",
-                        facet_row="공장그룹",
-                        category_orders={"공장그룹": factory_order, "공정": target_order},
-                        range_y=[0, 100],
-                        text="평균점수",
-                        color_discrete_map=proc_color_map,
-                    )
-                    fig_fac.update_traces(texttemplate="%{text:.1f}", textposition="outside", cliponaxis=False)
-                    fig_fac.update_layout(
-                        height=520,
-                        margin=dict(l=110, r=10, t=30, b=10),
-                        showlegend=True,
-                        xaxis_title="공정",
-                        yaxis_title="점수",
-                        legend_title_text="공정",
-                    )
-                    # facet 라벨을 왼쪽에 보이도록 위치/텍스트 보정
-                    for ann in fig_fac.layout.annotations:
-                        if isinstance(ann.text, str) and "공장그룹=" in ann.text:
-                            raw = ann.text.replace("공장그룹=", "")
-                            ann.text = factory_display.get(raw, raw)
-                            ann.x = -0.10
-                            ann.xanchor = "left"
-                            ann.yanchor = "middle"
-                    # y축 제목이 패널마다 반복되지 않도록(첫 패널만 표시)
-                    fig_fac.update_yaxes(title_text="점수", row=1, col=1)
-                    fig_fac.update_yaxes(title_text="", row=2, col=1)
-                    fig_fac.update_yaxes(title_text="", row=3, col=1)
-                    # 구분선(패널 사이)
-                    fig_fac.add_shape(type="line", xref="paper", yref="paper", x0=0, x1=1, y0=2/3, y1=2/3, line=dict(color="#E5E7EB", width=2))
-                    fig_fac.add_shape(type="line", xref="paper", yref="paper", x0=0, x1=1, y0=1/3, y1=1/3, line=dict(color="#E5E7EB", width=2))
-                    st.plotly_chart(fig_fac, use_container_width=True)
+                        fig_factory.update_layout(
+                            height=chart_height,
+                            margin=dict(l=10, r=10, t=10, b=10),
+                            showlegend=False,
+                            xaxis_title="공장",
+                            yaxis_title="점수(%)",
+                        )
+                        st.plotly_chart(fig_factory, use_container_width=True)
+
+                with c_right:
+                    st.markdown("#### 공장별 공정 평균 점수 (A/C/S관)")
+                    if len(proc_acs) == 0:
+                        st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
+                    else:
+                        by_fac_proc = (
+                            proc_acs.groupby(["공장그룹", "공정"], dropna=False)
+                            .apply(
+                                lambda g: (g["공정점수"] * pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0)).sum()
+                                / max(float(pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0).sum()), 1.0)
+                            )
+                            .rename("평균점수")
+                            .reset_index()
+                        )
+                        by_fac_proc["평균점수"] = pd.to_numeric(by_fac_proc["평균점수"], errors="coerce").fillna(0)
+                        by_fac_proc["공정"] = pd.Categorical(by_fac_proc["공정"], categories=target_order, ordered=True)
+                        by_fac_proc = by_fac_proc.sort_values(["공장그룹", "공정"])
+
+                        fig_fac = px.bar(
+                            by_fac_proc,
+                            x="공정",
+                            y="평균점수",
+                            color="공정",
+                            facet_row="공장그룹",
+                            facet_row_spacing=0.10,
+                            category_orders={"공장그룹": factory_order, "공정": target_order},
+                            range_y=[0, 100],
+                            text="평균점수",
+                            color_discrete_map=proc_color_map,
+                        )
+                        fig_fac.update_traces(marker=dict(cornerradius=14), texttemplate="%{text:.1f}", textposition="outside", cliponaxis=False)
+                        fig_fac.update_layout(
+                            height=chart_height,
+                            margin=dict(l=130, r=10, t=30, b=10),
+                            showlegend=True,
+                            xaxis_title="공정",
+                            yaxis_title="점수(%)",
+                            legend_title_text="공정",
+                        )
+                        # facet 라벨을 왼쪽에 보이도록 위치/텍스트 보정
+                        for ann in fig_fac.layout.annotations:
+                            if isinstance(ann.text, str) and "공장그룹=" in ann.text:
+                                raw = ann.text.replace("공장그룹=", "")
+                                ann.text = factory_display.get(raw, raw)
+                                ann.x = -0.12
+                                ann.xanchor = "left"
+                                ann.yanchor = "middle"
+                        # y축 제목이 패널마다 반복되지 않도록(첫 패널만 표시)
+                        fig_fac.update_yaxes(title_text="점수(%)", row=1, col=1)
+                        fig_fac.update_yaxes(title_text="", row=2, col=1)
+                        fig_fac.update_yaxes(title_text="", row=3, col=1)
+                        # 구분선(패널 사이)
+                        fig_fac.add_shape(type="line", xref="paper", yref="paper", x0=0, x1=1, y0=2/3, y1=2/3, line=dict(color="#E5E7EB", width=2))
+                        fig_fac.add_shape(type="line", xref="paper", yref="paper", x0=0, x1=1, y0=1/3, y1=1/3, line=dict(color="#E5E7EB", width=2))
+                        st.plotly_chart(fig_fac, use_container_width=True)
 
                 st.markdown("#### 일자별 공정 점수 추이 (A/C/S관)")
                 if len(proc_acs) > 0:
