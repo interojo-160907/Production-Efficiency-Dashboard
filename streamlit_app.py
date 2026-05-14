@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 import calendar
-from datetime import datetime
+from datetime import datetime, date
 from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
@@ -1425,6 +1425,15 @@ try:
 
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
+    # 메인 탭(세션 유지): 기간조회 선택 후에도 탭 이동 시 첫 탭으로 돌아가는 현상 방지
+    main_tab = st.radio(
+        "메인 탭",
+        ["생산 운영 현황", "공정 밸런스"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="main_tab",
+    )
+
     # 기간 필터 (기본: 당월)
     filter_option = st.radio("조회 기간", ["당월", "전월", "기간조회"], horizontal=True, label_visibility="collapsed")
 
@@ -1444,6 +1453,15 @@ try:
     full_min_date = daily_summary[daily_summary["날짜_date"] != today]["날짜_date"].min()
     full_max_date = daily_summary[daily_summary["날짜_date"] != today]["날짜_date"].max()
 
+    # 공정 밸런스는 결과2(매칭결과) 기준으로 가능한 최소일을 사용 (없으면 전체 기간과 동일)
+    process_full_min_date = None
+    process_full_max_date = None
+    if process_detail is not None and len(process_detail) > 0 and "날짜_date" in process_detail.columns:
+        _proc_dates = process_detail[process_detail["날짜_date"] != today]["날짜_date"]
+        if len(_proc_dates) > 0:
+            process_full_min_date = _proc_dates.min()
+            process_full_max_date = _proc_dates.max()
+
     # 날짜 범위 결정
     if filter_option == "당월":
         start_date = current_month_start
@@ -1452,8 +1470,12 @@ try:
         start_date = prev_month_start
         end_date = last_day_prev
     else:  # 기간조회
-        min_date = full_min_date
-        max_date = full_max_date
+        if main_tab == "공정 밸런스" and process_full_min_date is not None and process_full_max_date is not None:
+            min_date = process_full_min_date
+            max_date = process_full_max_date
+        else:
+            min_date = full_min_date
+            max_date = full_max_date
         if pd.isna(min_date) or pd.isna(max_date):
             st.warning("선택 가능한 날짜 범위를 계산할 수 없습니다. (데이터 없음)")
             min_date = today
@@ -1461,15 +1483,38 @@ try:
 
         col_filter1, col_space, col_filter2 = st.columns([1.5, 0.2, 1.5])
 
+        def _clamp_date(d: date, lo: date, hi: date) -> date:
+            return max(lo, min(hi, d))
+
+        _default_start = min_date if isinstance(min_date, date) else today
+        _default_end = max_date if isinstance(max_date, date) else today
+        _ss_start = st.session_state.get("range_start", _default_start)
+        _ss_end = st.session_state.get("range_end", _default_end)
+        _ss_start = _clamp_date(_ss_start, min_date, max_date)
+        _ss_end = _clamp_date(_ss_end, min_date, max_date)
+
         with col_filter1:
-            start_date = st.date_input("시작 날짜", value=min_date, min_value=min_date, max_value=max_date)
+            start_date = st.date_input("시작 날짜", value=_ss_start, min_value=min_date, max_value=max_date, key="range_start")
 
         with col_filter2:
-            end_date = st.date_input("종료 날짜", value=max_date, min_value=min_date, max_value=max_date)
+            end_date = st.date_input("종료 날짜", value=_ss_end, min_value=min_date, max_value=max_date, key="range_end")
 
     if start_date > end_date:
         st.warning("시작 날짜가 종료 날짜보다 커서 자동으로 교체했습니다.")
         start_date, end_date = end_date, start_date
+
+    # 공정 밸런스는 결과2에 존재하는 기간 내로 강제(공정 밸런스 최초일 이전 데이터는 신뢰 불가)
+    if main_tab == "공정 밸런스" and process_full_min_date is not None and process_full_max_date is not None:
+        if start_date < process_full_min_date:
+            st.info(f"공정 밸런스 데이터는 {process_full_min_date}부터 있어 시작일을 자동 조정했습니다.")
+            start_date = process_full_min_date
+            if start_date > end_date:
+                end_date = start_date
+        if end_date > process_full_max_date:
+            st.info(f"공정 밸런스 데이터는 {process_full_max_date}까지 있어 종료일을 자동 조정했습니다.")
+            end_date = process_full_max_date
+            if start_date > end_date:
+                start_date = end_date
 
     st.markdown("<div style='height:30px'></div>", unsafe_allow_html=True)
 
@@ -1516,8 +1561,7 @@ try:
             need_responded_skus_total = float(pd.to_numeric(shortage_prod_daily["필요대응SKU수"], errors="coerce").fillna(0).sum())
             shortage_prod_rate = (need_responded_skus_total / produced_skus_total * 100) if produced_skus_total > 0 else None
 
-    tab_overview, tab_process = st.tabs(["생산 운영 현황", "공정 밸런스"])
-    with tab_overview:
+    if main_tab == "생산 운영 현황":
         colA, col3, col4, col5 = st.columns([2.6, 1.1, 1.1, 1.1])
         with colA:
             spec_value = f"{shortage_prod_rate:.1f}%" if shortage_prod_rate is not None else "-"
@@ -2369,7 +2413,7 @@ try:
                     except Exception as e:
                         st.error(f"ROWDATA 다운로드 준비 실패: {e}")
 
-    with tab_process:
+    if main_tab == "공정 밸런스":
         st.markdown("### ⚖️ 공정 밸런스")
         if not result2_candidates:
             st.info("`유효생산량_결과2*.xlsx` 파일을 찾을 수 없습니다. 결과2를 생성한 뒤, repo 루트 또는 `outputs/`에 넣어주세요.")
@@ -2975,17 +3019,17 @@ try:
 
                 st.markdown("#### 상세 테이블")
                 det_show = det.copy()
-                show_cols = [
-                    c
-                    for c in ["날짜_date", "공장", "공정", "신규분류요약", "제품명", "실적수량", "필요수량", "부족수량", "유효생산량", "과생산량", "불필요생산량"]
-                    if c in det_show.columns
-                ]
+                group_cols = [c for c in ["날짜_date", "공장그룹", "공장", "공정", "신규분류요약"] if c in det_show.columns]
+                value_cols = [c for c in ["실적수량", "필요수량", "부족수량", "유효생산량", "과생산량", "불필요생산량"] if c in det_show.columns]
+                if group_cols and value_cols:
+                    det_show = det_show.groupby(group_cols, dropna=False)[value_cols].sum().reset_index()
+                show_cols = [c for c in ["날짜_date", "공장", "공정", "신규분류요약"] if c in det_show.columns] + value_cols
                 det_show = det_show[show_cols].copy() if show_cols else det_show
                 if "공정" in det_show.columns:
                     det_show["공정"] = pd.Categorical(det_show["공정"], categories=target_order, ordered=True)
                 if "공장그룹" in det_show.columns:
                     det_show["공장그룹"] = pd.Categorical(det_show["공장그룹"], categories=factory_order + ["기타"], ordered=True)
-                sort_cols = [c for c in ["날짜_date", "공장그룹", "공장", "공정", "신규분류요약", "제품명"] if c in det_show.columns]
+                sort_cols = [c for c in ["날짜_date", "공장그룹", "공장", "공정", "신규분류요약"] if c in det_show.columns]
                 det_show = det_show.sort_values(sort_cols, ascending=[True] * len(sort_cols)) if sort_cols else det_show
                 st.dataframe(det_show, use_container_width=True, height=520)
 except Exception as e:
