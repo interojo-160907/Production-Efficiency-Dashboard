@@ -2595,7 +2595,7 @@ try:
                 chart_height = 520
 
                 with c_left:
-                    st.markdown("#### 공장별 종합 점수 (A/C/S관)")
+                    st.markdown("#### 공장별 종합 점수")
                     if len(proc_acs) == 0:
                         st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
                     else:
@@ -2659,15 +2659,24 @@ try:
 
                         fig_factory.update_layout(
                             height=chart_height,
-                            margin=dict(l=10, r=10, t=10, b=10),
+                            margin=dict(l=95, r=10, t=10, b=10),
                             showlegend=False,
                             xaxis_title="공장",
-                            yaxis_title="점수(0-100)",
+                            yaxis_title="종합 점수",
+                            xaxis=dict(
+                                tickfont=dict(size=18, family="Arial", color="#111827"),
+                                title_font=dict(size=18, family="Arial", color="#111827"),
+                            ),
+                            yaxis=dict(
+                                tickfont=dict(size=14, family="Arial", color="#111827"),
+                                title_font=dict(size=18, family="Arial", color="#111827"),
+                                automargin=True,
+                            ),
                         )
                         st.plotly_chart(fig_factory, use_container_width=True)
 
                 with c_right:
-                    st.markdown("#### 공장별 공정 평균 점수 (A/C/S관)")
+                    st.markdown("#### 공장별 공정 평균 점수")
                     if len(proc_acs) == 0:
                         st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
                     else:
@@ -2731,7 +2740,7 @@ try:
                         fig_fac.add_shape(type="line", xref="paper", yref="paper", x0=0, x1=1, y0=1/3, y1=1/3, line=dict(color="#E5E7EB", width=2))
                         st.plotly_chart(fig_fac, use_container_width=True)
 
-                st.markdown("#### 일자별 공정 점수 추이 (A/C/S관)")
+                st.markdown("#### 일자별 공정 점수 추이")
                 if len(proc_acs) > 0:
                     daily = (
                         proc_acs.groupby(["날짜_date", "공장그룹", "공정"], dropna=False)
