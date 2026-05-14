@@ -2447,12 +2447,33 @@ try:
                 max_over_proc = proc.groupby("공정_표시")["과생산수량"].sum().sort_values(ascending=False).index[0] if len(proc) else "-"
                 risk_count = int((by_proc["평균점수"] < 70).sum()) if len(by_proc) else 0
 
-                k1,k2,k3,k4,k5 = st.columns(5)
-                with k1: render_kpi_card("공정 밸런스 종합점수", f"<span style='color:#1d4ed8'>{overall:.1f}점</span>")
-                with k2: render_kpi_card("최저 점수 공정", f"<span style='color:#b91c1c'>{worst_proc}</span>")
-                with k3: render_kpi_card("부족수량 최대 공정", f"{max_short_proc}")
-                with k4: render_kpi_card("과생산수량 최대 공정", f"{max_over_proc}")
-                with k5: render_kpi_card("위험 공정 수", f"<span style='color:#b91c1c'>{risk_count}</span>")
+                overall_status = (
+                    "양호" if overall >= 90 else
+                    "주의" if overall >= 80 else
+                    "경고" if overall >= 70 else
+                    "위험"
+                )
+                status_color = {"양호": "#047857", "주의": "#1d4ed8", "경고": "#b45309", "위험": "#b91c1c"}
+                overall_status_html = f"<span style='color:{status_color.get(overall_status, '#111827')}'>{overall_status}</span>"
+
+                proc_score_map = {str(r["공정"]): float(r["평균점수"]) for _, r in by_proc.iterrows()} if len(by_proc) else {}
+                k_cols = st.columns([1.25, 1, 1, 1, 1, 1])
+                with k_cols[0]:
+                    render_kpi_card(
+                        "공정 밸런스 종합점수",
+                        f"<span style='color:#1d4ed8'>{overall:.1f}점</span>",
+                        sub=f"등급: {overall_status_html}",
+                    )
+                with k_cols[1]:
+                    render_kpi_card("사출 점수", f"{proc_score_map.get('사출', 0.0):.1f}점")
+                with k_cols[2]:
+                    render_kpi_card("분리 점수", f"{proc_score_map.get('분리', 0.0):.1f}점")
+                with k_cols[3]:
+                    render_kpi_card("하드레이션 점수", f"{proc_score_map.get('하드레이션', 0.0):.1f}점")
+                with k_cols[4]:
+                    render_kpi_card("접착 점수", f"{proc_score_map.get('접착', 0.0):.1f}점")
+                with k_cols[5]:
+                    render_kpi_card("최종공정 점수", f"{proc_score_map.get('최종공정', 0.0):.1f}점")
 
                 proc_acs = proc[proc["공장그룹"].isin(factory_order)].copy()
 
@@ -2481,8 +2502,24 @@ try:
                         text="평균점수",
                     )
                     fig_fac.update_traces(texttemplate="%{text:.1f}", textposition="outside", cliponaxis=False)
-                    fig_fac.update_layout(height=520, margin=dict(l=10, r=10, t=30, b=10), yaxis_title="점수", showlegend=False)
-                    fig_fac.for_each_annotation(lambda a: a.update(text=a.text.replace("공장그룹=", "")))
+                    fig_fac.update_layout(
+                        height=520,
+                        margin=dict(l=80, r=10, t=30, b=10),
+                        showlegend=False,
+                        xaxis_title="공정",
+                        yaxis_title="점수",
+                    )
+                    # facet 라벨을 왼쪽에 보이도록 위치/텍스트 보정
+                    for ann in fig_fac.layout.annotations:
+                        if isinstance(ann.text, str) and "공장그룹=" in ann.text:
+                            ann.text = ann.text.replace("공장그룹=", "")
+                            ann.x = -0.06
+                            ann.xanchor = "left"
+                            ann.yanchor = "middle"
+                    # y축 제목이 패널마다 반복되지 않도록(첫 패널만 표시)
+                    fig_fac.update_yaxes(title_text="점수", row=1, col=1)
+                    fig_fac.update_yaxes(title_text="", row=2, col=1)
+                    fig_fac.update_yaxes(title_text="", row=3, col=1)
                     st.plotly_chart(fig_fac, use_container_width=True)
 
                 st.markdown("#### 일자별 공정 점수 추이 (A/C/S관)")
@@ -2506,8 +2543,22 @@ try:
                         markers=False,
                         range_y=[0, 100],
                     )
-                    fig_line.update_layout(height=620, margin=dict(l=10, r=10, t=30, b=10), xaxis_title="날짜", yaxis_title="점수")
-                    fig_line.for_each_annotation(lambda a: a.update(text=a.text.replace("공장그룹=", "")))
+                    fig_line.update_layout(
+                        height=620,
+                        margin=dict(l=80, r=10, t=30, b=10),
+                        xaxis_title="날짜",
+                        yaxis_title="점수",
+                        legend_title_text="공정",
+                    )
+                    for ann in fig_line.layout.annotations:
+                        if isinstance(ann.text, str) and "공장그룹=" in ann.text:
+                            ann.text = ann.text.replace("공장그룹=", "")
+                            ann.x = -0.06
+                            ann.xanchor = "left"
+                            ann.yanchor = "middle"
+                    fig_line.update_yaxes(title_text="점수", row=1, col=1)
+                    fig_line.update_yaxes(title_text="", row=2, col=1)
+                    fig_line.update_yaxes(title_text="", row=3, col=1)
                     st.plotly_chart(fig_line, use_container_width=True)
 
                 st.markdown("#### 공장별 요약")
