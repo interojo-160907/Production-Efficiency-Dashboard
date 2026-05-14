@@ -1249,6 +1249,61 @@ def load_process_balance_excels(
     return out.reset_index(drop=True), has_any_sheet
 
 
+@st.cache_data(show_spinner=False)
+def load_process_balance_detail_excels(
+    result_paths: tuple[str, ...],
+    mtime_nss: tuple[int, ...],
+) -> tuple[pd.DataFrame, bool]:
+    """유효생산량_결과2 엑셀 로드 (매칭결과) + 전처리
+
+    - 시트가 없는 파일은 스킵합니다(오류 없이 안내용).
+    - 반환: (dataframe, has_any_sheet)
+    """
+    _ = mtime_nss  # cache key only
+
+    frames: list[pd.DataFrame] = []
+    has_any_sheet = False
+
+    for path_str, mtime_ns in zip(result_paths, mtime_nss, strict=False):
+        path = Path(path_str)
+        try:
+            df = pd.read_excel(path, sheet_name="매칭결과")
+        except Exception:
+            continue
+
+        if df is None or len(df) == 0:
+            has_any_sheet = True
+            continue
+
+        has_any_sheet = True
+        df = df.copy()
+        df["_source_mtime_ns"] = mtime_ns
+        frames.append(df)
+
+    out = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    if len(out) == 0:
+        return out, has_any_sheet
+
+    # 최신 파일 우선(중복 제거용)
+    out = out.sort_values("_source_mtime_ns", kind="stable")
+
+    if "날짜" in out.columns:
+        out["날짜"] = pd.to_datetime(out["날짜"], errors="coerce")
+        out = out[out["날짜"].notna()].copy()
+        out["날짜_date"] = out["날짜"].dt.date
+
+    dedup_cols = [c for c in ["날짜_date", "공장", "공정", "신규분류요약", "제품코드"] if c in out.columns]
+    if dedup_cols:
+        out = out.drop_duplicates(subset=dedup_cols, keep="last")
+
+    for col in ["실적수량", "필요수량", "부족수량", "유효생산량", "과생산량", "불필요생산량"]:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
+
+    out = out.drop(columns=["_source_mtime_ns"], errors="ignore")
+    return out.reset_index(drop=True), has_any_sheet
+
+
 # 결과 파일 선택(월별 분리 저장 지원)
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 base_dir = Path(BASE_PATH)
@@ -1320,10 +1375,13 @@ try:
     # 공정 밸런스: 결과2 로드(없으면 빈 DF)
     process_daily = pd.DataFrame()
     process_has_sheet = False
+    process_detail = pd.DataFrame()
+    process_detail_has_sheet = False
     if result2_candidates:
         result2_paths = tuple(str(p) for p in result2_candidates)
         mtime2_nss = tuple(int(p.stat().st_mtime_ns) for p in result2_candidates)
         process_daily, process_has_sheet = load_process_balance_excels(result2_paths, mtime2_nss)
+        process_detail, process_detail_has_sheet = load_process_balance_detail_excels(result2_paths, mtime2_nss)
 
     # 금일 데이터 제외 (아직 생산 중이므로) - KST 기준
     now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
@@ -2314,21 +2372,28 @@ try:
                 if "공정" in proc.columns:
                     proc["공정"] = proc["공정"].replace({"최종공정": "누수규격"})
 
-                # 공장 필터(옵션): 기간 필터는 기존과 동일하게 상단 필터를 그대로 사용
-                factories = sorted([str(x) for x in proc["공장"].dropna().unique()]) if "공장" in proc.columns else []
-                selected_factories = st.multiselect("공장 선택", factories, default=factories) if factories else []
-                if selected_factories:
-                    proc = proc[proc["공장"].isin(selected_factories)].copy()
-                elif factories:
-                    st.info("선택된 공장이 없습니다.")
-                    st.stop()
-
                 target_order_raw = ["사출", "분리", "하드레이션", "접착", "누수규격"]
                 proc = proc[proc["공정"].isin(target_order_raw)].copy()
 
                 # 표시명(요청: 최종공정)
                 proc["공정_표시"] = proc["공정"].replace({"누수규격": "최종공정"})
                 target_order = ["사출", "분리", "하드레이션", "접착", "최종공정"]
+
+                # 공장 그룹(A/C/S관) 매핑 + 순서 고정
+                if "공장" in proc.columns:
+                    proc["공장그룹"] = np.select(
+                        [
+                            proc["공장"].astype(str).str.contains("A관", na=False),
+                            proc["공장"].astype(str).str.contains("C관", na=False),
+                            proc["공장"].astype(str).str.contains("S관", na=False),
+                        ],
+                        ["A관", "C관", "S관"],
+                        default="기타",
+                    )
+                else:
+                    proc["공장그룹"] = "기타"
+                factory_order = ["A관", "C관", "S관"]
+                proc["공장그룹"] = pd.Categorical(proc["공장그룹"], categories=factory_order + ["기타"], ordered=True)
 
                 proc["필요수량"] = (
                     pd.to_numeric(proc["실적수량"], errors="coerce").fillna(0)
@@ -2389,29 +2454,92 @@ try:
                 with k4: render_kpi_card("과생산수량 최대 공정", f"{max_over_proc}")
                 with k5: render_kpi_card("위험 공정 수", f"<span style='color:#b91c1c'>{risk_count}</span>")
 
-                st.markdown("#### 공정별 평균 점수")
-                fig_bar = px.bar(by_proc, x="공정", y="평균점수", range_y=[0, 100], text="평균점수")
-                fig_bar.update_traces(texttemplate="%{text:.1f}", textposition="outside")
-                fig_bar.update_layout(height=360, margin=dict(l=10, r=10, t=30, b=10), yaxis_title="점수")
-                st.plotly_chart(fig_bar, use_container_width=True)
+                proc_acs = proc[proc["공장그룹"].isin(factory_order)].copy()
 
-                st.markdown("#### 일자별 공정 점수 추이")
-                daily = (
-                    proc.groupby(["날짜_date", "공정_표시"], dropna=False)
-                    .apply(lambda g: (g["공정점수"] * g["필요수량"].clip(lower=0)).sum() / max(float(g["필요수량"].clip(lower=0).sum()), 1.0))
-                    .rename("점수")
+                st.markdown("#### 공장별 공정 평균 점수 (A/C/S관)")
+                if len(proc_acs) == 0:
+                    st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
+                else:
+                    by_fac_proc = (
+                        proc_acs.groupby(["공장그룹", "공정_표시"], dropna=False)
+                        .apply(lambda g: (g["공정점수"] * g["필요수량"].clip(lower=0)).sum() / max(float(g["필요수량"].clip(lower=0).sum()), 1.0))
+                        .rename("평균점수")
+                        .reset_index()
+                    )
+                    by_fac_proc = by_fac_proc.rename(columns={"공정_표시": "공정"})
+                    by_fac_proc["평균점수"] = pd.to_numeric(by_fac_proc["평균점수"], errors="coerce").fillna(0)
+                    by_fac_proc["공정"] = pd.Categorical(by_fac_proc["공정"], categories=target_order, ordered=True)
+                    by_fac_proc = by_fac_proc.sort_values(["공장그룹", "공정"])
+
+                    fig_fac = px.bar(
+                        by_fac_proc,
+                        x="공정",
+                        y="평균점수",
+                        facet_row="공장그룹",
+                        category_orders={"공장그룹": factory_order, "공정": target_order},
+                        range_y=[0, 100],
+                        text="평균점수",
+                    )
+                    fig_fac.update_traces(texttemplate="%{text:.1f}", textposition="outside", cliponaxis=False)
+                    fig_fac.update_layout(height=520, margin=dict(l=10, r=10, t=30, b=10), yaxis_title="점수", showlegend=False)
+                    fig_fac.for_each_annotation(lambda a: a.update(text=a.text.replace("공장그룹=", "")))
+                    st.plotly_chart(fig_fac, use_container_width=True)
+
+                st.markdown("#### 일자별 공정 점수 추이 (A/C/S관)")
+                if len(proc_acs) > 0:
+                    daily = (
+                        proc_acs.groupby(["날짜_date", "공장그룹", "공정_표시"], dropna=False)
+                        .apply(lambda g: (g["공정점수"] * g["필요수량"].clip(lower=0)).sum() / max(float(g["필요수량"].clip(lower=0).sum()), 1.0))
+                        .rename("점수")
+                        .reset_index()
+                    )
+                    daily = daily.rename(columns={"공정_표시": "공정"})
+                    daily["공정"] = pd.Categorical(daily["공정"], categories=target_order, ordered=True)
+                    daily = daily.sort_values(["날짜_date", "공장그룹", "공정"])
+                    fig_line = px.line(
+                        daily,
+                        x="날짜_date",
+                        y="점수",
+                        color="공정",
+                        facet_row="공장그룹",
+                        category_orders={"공장그룹": factory_order, "공정": target_order},
+                        markers=False,
+                        range_y=[0, 100],
+                    )
+                    fig_line.update_layout(height=620, margin=dict(l=10, r=10, t=30, b=10), xaxis_title="날짜", yaxis_title="점수")
+                    fig_line.for_each_annotation(lambda a: a.update(text=a.text.replace("공장그룹=", "")))
+                    st.plotly_chart(fig_line, use_container_width=True)
+
+                st.markdown("#### 공장별 요약")
+                proc["공정"] = proc["공정_표시"]
+                summary = (
+                    proc.groupby(["날짜_date", "공장그룹", "공장", "공정"], dropna=False)
+                    .apply(
+                        lambda g: pd.Series(
+                            {
+                                "실적수량": float(pd.to_numeric(g["실적수량"], errors="coerce").fillna(0).sum()),
+                                "부족수량": float(pd.to_numeric(g["부족수량"], errors="coerce").fillna(0).sum()),
+                                "과생산수량": float(pd.to_numeric(g["과생산수량"], errors="coerce").fillna(0).sum()),
+                                "필요수량": float(pd.to_numeric(g["필요수량"], errors="coerce").fillna(0).sum()),
+                                "공정점수": float((g["공정점수"] * g["필요수량"].clip(lower=0)).sum() / max(float(g["필요수량"].clip(lower=0).sum()), 1.0)),
+                            }
+                        )
+                    )
                     .reset_index()
                 )
-                daily = daily.rename(columns={"공정_표시": "공정"})
-                daily["공정"] = pd.Categorical(daily["공정"], categories=target_order, ordered=True)
-                daily = daily.sort_values(["날짜_date", "공정"])
-                fig_line = px.line(daily, x="날짜_date", y="점수", color="공정", markers=True, range_y=[0, 100])
-                fig_line.update_layout(height=380, margin=dict(l=10, r=10, t=30, b=10), xaxis_title="날짜", yaxis_title="점수")
-                st.plotly_chart(fig_line, use_container_width=True)
-
-                st.markdown("#### 상세 테이블")
-                proc["공정"] = proc["공정_표시"]
-                detail_cols = [
+                summary["상태"] = np.select(
+                    [
+                        summary["공정점수"] >= 90,
+                        summary["공정점수"] >= 80,
+                        summary["공정점수"] >= 70,
+                    ],
+                    ["양호", "주의", "경고"],
+                    default="위험",
+                )
+                summary["공장그룹"] = pd.Categorical(summary["공장그룹"], categories=factory_order + ["기타"], ordered=True)
+                summary["공정"] = pd.Categorical(summary["공정"], categories=target_order, ordered=True)
+                summary = summary.sort_values(["날짜_date", "공장그룹", "공장", "공정"], ascending=[True, True, True, True])
+                summary_show_cols = [
                     c
                     for c in [
                         "날짜_date",
@@ -2421,17 +2549,52 @@ try:
                         "부족수량",
                         "과생산수량",
                         "필요수량",
-                        "기본대응점수",
-                        "과생산률",
-                        "과생산감점",
                         "공정점수",
                         "상태",
                     ]
-                    if c in proc.columns
+                    if c in summary.columns
                 ]
-                detail = proc[detail_cols].copy()
-                detail = detail.sort_values(["날짜_date", "공장", "공정"], ascending=[False, True, True])
-                st.dataframe(detail, use_container_width=True, height=520)
+                st.dataframe(summary[summary_show_cols] if summary_show_cols else summary, use_container_width=True, height=420)
+
+                st.markdown("#### 상세 테이블")
+                if (not result2_candidates) or (process_detail is None) or (len(process_detail) == 0):
+                    st.info("`매칭결과` 시트가 없거나 데이터가 없습니다. (상세 테이블을 표시할 수 없습니다)")
+                else:
+                    det = process_detail.copy()
+                    if "공정" in det.columns:
+                        det["공정"] = det["공정"].replace({"최종공정": "누수규격"})
+                    if "날짜_date" in det.columns:
+                        det = det[(det["날짜_date"] >= start_date) & (det["날짜_date"] <= end_date) & (det["날짜_date"] != today)].copy()
+                    if "공정" in det.columns:
+                        det = det[det["공정"].isin(target_order_raw)].copy()
+                        det["공정"] = det["공정"].replace({"누수규격": "최종공정"})
+                    if "제품코드" in det.columns and "제품명" not in det.columns:
+                        det["제품명"] = det["제품코드"].astype(str)
+
+                    if "공장" in det.columns:
+                        det["공장그룹"] = np.select(
+                            [
+                                det["공장"].astype(str).str.contains("A관", na=False),
+                                det["공장"].astype(str).str.contains("C관", na=False),
+                                det["공장"].astype(str).str.contains("S관", na=False),
+                            ],
+                            ["A관", "C관", "S관"],
+                            default="기타",
+                        )
+                    else:
+                        det["공장그룹"] = "기타"
+                    det["공장그룹"] = pd.Categorical(det["공장그룹"], categories=factory_order + ["기타"], ordered=True)
+                    det["공정"] = pd.Categorical(det["공정"], categories=target_order, ordered=True) if "공정" in det.columns else det.get("공정")
+
+                    show_cols = [
+                        c
+                        for c in ["날짜_date", "공장", "공정", "신규분류요약", "제품명", "실적수량", "부족수량", "과생산량", "불필요생산량"]
+                        if c in det.columns
+                    ]
+                    det_show = det[show_cols].copy() if show_cols else det.copy()
+                    sort_cols = [c for c in ["날짜_date", "공장그룹", "공장", "공정", "신규분류요약", "제품명"] if c in det_show.columns]
+                    det_show = det_show.sort_values(sort_cols, ascending=[True] * len(sort_cols)) if sort_cols else det_show
+                    st.dataframe(det_show, use_container_width=True, height=520)
 except Exception as e:
     st.error(f"❌ 오류가 발생했습니다: {str(e)}")
     st.info("결과 파일을 다시 생성해주세요.")
