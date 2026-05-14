@@ -2756,7 +2756,6 @@ try:
                         "<div style='display:flex; gap:16px; align-items:center; margin:6px 0 10px 0; flex-wrap:wrap;'>"
                         "<div style='display:flex; align-items:center; gap:8px;'><span style='width:12px; height:12px; border-radius:3px; background:#EF4444; display:inline-block;'></span><b>초과</b></div>"
                         "<div style='display:flex; align-items:center; gap:8px;'><span style='width:12px; height:12px; border-radius:3px; background:#F59E0B; display:inline-block;'></span><b>비정형</b></div>"
-                        "<div style='color:#6B7280'>※ 중앙 값은 <b>100 - 관별 종합점수</b> (감점)</div>"
                         "</div>"
                     )
                     st.markdown(legend_html, unsafe_allow_html=True)
@@ -2791,7 +2790,8 @@ try:
                                     sort=False,
                                     direction="clockwise",
                                     marker=dict(colors=[donut_colors["초과"], donut_colors["비정형"]]),
-                                    textinfo="percent",
+                                    textinfo="none",
+                                    texttemplate="%{percent:.1%}",
                                     textposition="inside",
                                     insidetextorientation="horizontal",
                                     textfont=dict(size=22, family="Arial", color="#111827"),
@@ -2805,11 +2805,11 @@ try:
                             margin=dict(l=10, r=10, t=50, b=10),
                             showlegend=False,
                             title=dict(text=factory_display.get(g, str(g)), x=0.5, xanchor="center", font=dict(size=20, family="Arial", color="#111827")),
-                            uniformtext_minsize=16,
-                            uniformtext_mode="hide",
+                            uniformtext_minsize=18,
+                            uniformtext_mode="show",
                             annotations=[
                                 dict(
-                                    text=f"감점<br><b>{penalty_total:.1f}</b><br><span style='color:#6B7280; font-size:14px;'>(100-종합점수)</span>",
+                                    text=f"감점<br><b>{penalty_total:.1f}</b>",
                                     x=0.5,
                                     y=0.5,
                                     font=dict(size=28, family="Arial", color="#B91C1C"),
@@ -2820,6 +2820,89 @@ try:
 
                         with donut_cols[idx]:
                             st.plotly_chart(fig_donut, use_container_width=True)
+
+                    # 상단 legend 문구는 중앙에서 충분히 설명되므로 노출 제거(요청)
+                    # (아래 공정별 도넛은 토글로 제공)
+                    show_by_proc = st.toggle("공정별로 보기", value=False)
+                    if show_by_proc:
+                        st.markdown("##### 공정별 감점 요인(초과/비정형)")
+                        proc_qty_cols = [c for c in ["실적수량", "과생산량", "불필요생산량"] if c in proc_acs.columns]
+                        proc_comp = (
+                            proc_acs.groupby(["공장그룹", "공정"], dropna=False)[proc_qty_cols].sum().reset_index()
+                            if proc_qty_cols else pd.DataFrame(columns=["공장그룹", "공정"])
+                        )
+                        for c in ["실적수량", "과생산량", "불필요생산량"]:
+                            if c in proc_comp.columns:
+                                proc_comp[c] = pd.to_numeric(proc_comp[c], errors="coerce").fillna(0)
+                            else:
+                                proc_comp[c] = 0.0
+
+                        proc_comp["초과(%)"] = np.where(proc_comp["실적수량"] > 0, proc_comp["과생산량"] / proc_comp["실적수량"] * 100, 0.0)
+                        proc_comp["비정형(%)"] = np.where(proc_comp["실적수량"] > 0, proc_comp["불필요생산량"] / proc_comp["실적수량"] * 100, 0.0)
+                        proc_comp["초과(%)"] = pd.to_numeric(proc_comp["초과(%)"], errors="coerce").fillna(0).clip(0, 100)
+                        proc_comp["비정형(%)"] = pd.to_numeric(proc_comp["비정형(%)"], errors="coerce").fillna(0).clip(0, 100)
+                        denom = (proc_comp["초과(%)"] + proc_comp["비정형(%)"]).replace(0, np.nan)
+                        proc_comp["초과비중(%)"] = (proc_comp["초과(%)"] / denom * 100).fillna(0).clip(0, 100)
+                        proc_comp["비정형비중(%)"] = (proc_comp["비정형(%)"] / denom * 100).fillna(0).clip(0, 100)
+
+                        pie_rows: list[dict] = []
+                        for _, r in proc_comp.iterrows():
+                            gname = str(r.get("공장그룹", ""))
+                            pname = str(r.get("공정", ""))
+                            if pname not in target_order or gname not in factory_order:
+                                continue
+                            pie_rows.append({"공장그룹": gname, "공정": pname, "구분": "초과", "비중": float(r.get("초과비중(%)", 0.0)), "실적대비": float(r.get("초과(%)", 0.0))})
+                            pie_rows.append({"공장그룹": gname, "공정": pname, "구분": "비정형", "비중": float(r.get("비정형비중(%)", 0.0)), "실적대비": float(r.get("비정형(%)", 0.0))})
+
+                        pie_df = pd.DataFrame(pie_rows)
+                        if len(pie_df) == 0:
+                            st.info("공정별 감점 요인 데이터를 계산할 수 없습니다.")
+                        else:
+                            pie_df["공장그룹"] = pd.Categorical(pie_df["공장그룹"], categories=factory_order, ordered=True)
+                            pie_df["공정"] = pd.Categorical(pie_df["공정"], categories=target_order, ordered=True)
+                            pie_df = pie_df.sort_values(["공장그룹", "공정", "구분"])
+
+                            fig_proc = px.pie(
+                                pie_df,
+                                names="구분",
+                                values="비중",
+                                facet_row="공장그룹",
+                                facet_col="공정",
+                                hole=0.60,
+                                category_orders={"공장그룹": factory_order, "공정": target_order, "구분": ["초과", "비정형"]},
+                                color="구분",
+                                color_discrete_map={"초과": donut_colors["초과"], "비정형": donut_colors["비정형"]},
+                                custom_data=["실적대비"],
+                            )
+                            fig_proc.update_traces(
+                                textinfo="none",
+                                texttemplate="%{percent:.1%}",
+                                textposition="inside",
+                                insidetextorientation="horizontal",
+                                textfont=dict(size=14, family="Arial", color="#111827"),
+                                hovertemplate="%{label}<br>비중=%{percent}<br>실적대비=%{customdata[0]:.1f}%<extra></extra>",
+                            )
+                            # facet 라벨 텍스트 교체/가독성
+                            for ann in fig_proc.layout.annotations:
+                                if not isinstance(ann.text, str):
+                                    continue
+                                if "공장그룹=" in ann.text:
+                                    raw = ann.text.replace("공장그룹=", "")
+                                    ann.text = factory_display.get(raw, raw)
+                                    ann.font = dict(size=14, family="Arial", color="#111827")
+                                if "공정=" in ann.text:
+                                    raw = ann.text.replace("공정=", "")
+                                    ann.text = raw
+                                    ann.font = dict(size=14, family="Arial", color="#111827")
+
+                            fig_proc.update_layout(
+                                height=520,
+                                margin=dict(l=10, r=10, t=20, b=10),
+                                showlegend=False,
+                                uniformtext_minsize=12,
+                                uniformtext_mode="show",
+                            )
+                            st.plotly_chart(fig_proc, use_container_width=True)
 
                 st.markdown("#### 공장별 요약")
                 summary = (
