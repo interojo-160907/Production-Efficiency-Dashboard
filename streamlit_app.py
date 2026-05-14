@@ -2718,7 +2718,7 @@ try:
                         fig_fac.add_shape(type="line", xref="paper", yref="paper", x0=0, x1=1, y0=1/3, y1=1/3, line=dict(color="#E5E7EB", width=2))
                         st.plotly_chart(fig_fac, use_container_width=True)
 
-                st.markdown("#### 관별 감점 요인(정확/초과/비정형)")
+                st.markdown("#### 관별 생산 구성비(정확/초과/비정형)")
                 if len(proc_acs) == 0:
                     st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
                 else:
@@ -2740,6 +2740,16 @@ try:
                     donut_cols = st.columns(3, gap="large")
                     donut_colors = {"정확": "#16A34A", "초과": "#EF4444", "비정형": "#F59E0B"}
 
+                    legend_html = (
+                        "<div style='display:flex; gap:16px; align-items:center; margin:6px 0 10px 0; flex-wrap:wrap;'>"
+                        "<div style='display:flex; align-items:center; gap:8px;'><span style='width:12px; height:12px; border-radius:3px; background:#16A34A; display:inline-block;'></span><b>정확</b></div>"
+                        "<div style='display:flex; align-items:center; gap:8px;'><span style='width:12px; height:12px; border-radius:3px; background:#EF4444; display:inline-block;'></span><b>초과</b></div>"
+                        "<div style='display:flex; align-items:center; gap:8px;'><span style='width:12px; height:12px; border-radius:3px; background:#F59E0B; display:inline-block;'></span><b>비정형</b></div>"
+                        "<div style='color:#6B7280'>※ 감점 요인: <b>초과 + 비정형</b></div>"
+                        "</div>"
+                    )
+                    st.markdown(legend_html, unsafe_allow_html=True)
+
                     for idx, g in enumerate(factory_order):
                         row = comp_map.get(str(g))
                         if row is None:
@@ -2751,7 +2761,12 @@ try:
                         valid = float(row.get("정확(%)", 0.0))
                         over = float(row.get("초과(%)", 0.0))
                         waste = float(row.get("비정형(%)", 0.0))
-                        penalty = max(0.0, min(100.0, over + waste))
+                        # 감점은 "초과 + 비정형"으로 정의 (정확은 감점요인이 아님)
+                        total = valid + over + waste
+                        penalty = over + waste
+                        if 99.0 <= total <= 101.0:
+                            penalty = 100.0 - valid
+                        penalty = max(0.0, min(100.0, float(penalty)))
 
                         fig_donut = go.Figure(
                             data=[
@@ -2779,10 +2794,10 @@ try:
                             uniformtext_mode="hide",
                             annotations=[
                                 dict(
-                                    text=f"감점<br><b>{penalty:.1f}%</b>",
+                                    text=f"정확<br><b>{valid:.1f}%</b><br><span style='color:#6B7280; font-size:14px;'>감점요인 {penalty:.1f}%</span>",
                                     x=0.5,
                                     y=0.5,
-                                    font=dict(size=22, family="Arial", color="#B91C1C"),
+                                    font=dict(size=22, family="Arial", color="#111827"),
                                     showarrow=False,
                                 )
                             ],
