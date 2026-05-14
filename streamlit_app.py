@@ -2863,12 +2863,16 @@ try:
                                     st.info("공정별 데이터 없음")
                                     continue
 
-                                long_df = pd.DataFrame(
-                                    {
-                                        "공정": sub["공정"].astype(str),
-                                        "구분": ["정확"] * len(sub) + ["감점요인"] * len(sub),
-                                        "비중": pd.concat([sub["정확(%)"], sub["감점요인(%)"]], ignore_index=True),
-                                    }
+                                base = sub[["공정", "정확(%)", "감점요인(%)"]].copy()
+                                base["공정"] = base["공정"].astype(str)
+                                long_df = pd.concat(
+                                    [
+                                        base.rename(columns={"정확(%)": "비중"})
+                                        .assign(구분="정확")[["공정", "구분", "비중"]],
+                                        base.rename(columns={"감점요인(%)": "비중"})
+                                        .assign(구분="감점요인")[["공정", "구분", "비중"]],
+                                    ],
+                                    ignore_index=True,
                                 )
                                 fig_bar = px.bar(
                                     long_df,
