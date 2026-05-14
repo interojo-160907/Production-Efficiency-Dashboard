@@ -2718,47 +2718,78 @@ try:
                         fig_fac.add_shape(type="line", xref="paper", yref="paper", x0=0, x1=1, y0=1/3, y1=1/3, line=dict(color="#E5E7EB", width=2))
                         st.plotly_chart(fig_fac, use_container_width=True)
 
-                st.markdown("#### 일자별 공정 점수 추이")
-                if len(proc_acs) > 0:
-                    daily = (
-                        proc_acs.groupby(["날짜_date", "공장그룹", "공정"], dropna=False)
-                        .apply(lambda g: (g["공정점수"] * pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0)).sum() / max(float(pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0).sum()), 1.0))
-                        .rename("점수")
-                        .reset_index()
-                    )
-                    daily["공정"] = pd.Categorical(daily["공정"], categories=target_order, ordered=True)
-                    daily = daily.sort_values(["날짜_date", "공장그룹", "공정"])
-                    fig_line = px.line(
-                        daily,
-                        x="날짜_date",
-                        y="점수",
-                        color="공정",
-                        facet_row="공장그룹",
-                        category_orders={"공장그룹": factory_order, "공정": target_order},
-                        markers=False,
-                        range_y=[0, 100],
-                        color_discrete_map=proc_color_map,
-                    )
-                    fig_line.update_layout(
-                        height=620,
-                        margin=dict(l=110, r=10, t=30, b=10),
-                        xaxis_title="날짜",
-                        yaxis_title="점수",
-                        legend_title_text="공정",
-                    )
-                    for ann in fig_line.layout.annotations:
-                        if isinstance(ann.text, str) and "공장그룹=" in ann.text:
-                            raw = ann.text.replace("공장그룹=", "")
-                            ann.text = factory_display.get(raw, raw)
-                            ann.x = -0.10
-                            ann.xanchor = "left"
-                            ann.yanchor = "middle"
-                    fig_line.update_yaxes(title_text="점수", row=1, col=1)
-                    fig_line.update_yaxes(title_text="", row=2, col=1)
-                    fig_line.update_yaxes(title_text="", row=3, col=1)
-                    fig_line.add_shape(type="line", xref="paper", yref="paper", x0=0, x1=1, y0=2/3, y1=2/3, line=dict(color="#E5E7EB", width=2))
-                    fig_line.add_shape(type="line", xref="paper", yref="paper", x0=0, x1=1, y0=1/3, y1=1/3, line=dict(color="#E5E7EB", width=2))
-                    st.plotly_chart(fig_line, use_container_width=True)
+                st.markdown("#### 관별 감점 요인(정확/초과/비정형)")
+                if len(proc_acs) == 0:
+                    st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
+                else:
+                    qty_cols = [c for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량"] if c in proc_acs.columns]
+                    comp = proc_acs.groupby("공장그룹", dropna=False)[qty_cols].sum().reset_index() if qty_cols else pd.DataFrame()
+                    for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량"]:
+                        if c in comp.columns:
+                            comp[c] = pd.to_numeric(comp[c], errors="coerce").fillna(0)
+                        else:
+                            comp[c] = 0.0
+
+                    comp["정확(%)"] = np.where(comp["실적수량"] > 0, comp["유효생산량"] / comp["실적수량"] * 100, 0.0)
+                    comp["초과(%)"] = np.where(comp["실적수량"] > 0, comp["과생산량"] / comp["실적수량"] * 100, 0.0)
+                    comp["비정형(%)"] = np.where(comp["실적수량"] > 0, comp["불필요생산량"] / comp["실적수량"] * 100, 0.0)
+                    for c in ["정확(%)", "초과(%)", "비정형(%)"]:
+                        comp[c] = pd.to_numeric(comp[c], errors="coerce").fillna(0).clip(0, 100)
+
+                    comp_map = {str(r["공장그룹"]): r for _, r in comp.iterrows()}
+                    donut_cols = st.columns(3, gap="large")
+                    donut_colors = {"정확": "#16A34A", "초과": "#EF4444", "비정형": "#F59E0B"}
+
+                    for idx, g in enumerate(factory_order):
+                        row = comp_map.get(str(g))
+                        if row is None:
+                            with donut_cols[idx]:
+                                st.caption(factory_display.get(g, str(g)))
+                                st.info("데이터 없음")
+                            continue
+
+                        valid = float(row.get("정확(%)", 0.0))
+                        over = float(row.get("초과(%)", 0.0))
+                        waste = float(row.get("비정형(%)", 0.0))
+                        penalty = max(0.0, min(100.0, over + waste))
+
+                        fig_donut = go.Figure(
+                            data=[
+                                go.Pie(
+                                    labels=["정확", "초과", "비정형"],
+                                    values=[valid, over, waste],
+                                    hole=0.62,
+                                    sort=False,
+                                    direction="clockwise",
+                                    marker=dict(colors=[donut_colors["정확"], donut_colors["초과"], donut_colors["비정형"]]),
+                                    textinfo="percent",
+                                    textposition="inside",
+                                    insidetextorientation="radial",
+                                    textfont=dict(size=18, family="Arial", color="#111827"),
+                                    hovertemplate="%{label}<br>%{value:.1f}%<extra></extra>",
+                                )
+                            ]
+                        )
+                        fig_donut.update_layout(
+                            height=320,
+                            margin=dict(l=10, r=10, t=50, b=10),
+                            showlegend=False,
+                            title=dict(text=factory_display.get(g, str(g)), x=0.5, xanchor="center", font=dict(size=20, family="Arial", color="#111827")),
+                            uniformtext_minsize=16,
+                            uniformtext_mode="hide",
+                            annotations=[
+                                dict(
+                                    text=f"감점<br><b>{penalty:.1f}%</b>",
+                                    x=0.5,
+                                    y=0.5,
+                                    font=dict(size=22, family="Arial", color="#B91C1C"),
+                                    showarrow=False,
+                                )
+                            ],
+                        )
+
+                        with donut_cols[idx]:
+                            st.plotly_chart(fig_donut, use_container_width=True)
 
                 st.markdown("#### 공장별 요약")
                 summary = (
