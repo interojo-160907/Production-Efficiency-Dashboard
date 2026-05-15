@@ -8,7 +8,6 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
-import plotly.io as pio
 import io
 from xlsxwriter.utility import xl_rowcol_to_cell
 import textwrap
@@ -1132,29 +1131,9 @@ RATE_LABEL_MAP = {
 
 st.set_page_config(page_title=DASHBOARD_TITLE, layout="wide", initial_sidebar_state="collapsed")
 
-# Plotly global theme: remove white panels (transparent bg) + subtle grid
-_plot_bg = "rgba(0,0,0,0)"
-pio.templates["dashboard_clean"] = go.layout.Template(
-    layout=dict(
-        paper_bgcolor=_plot_bg,
-        plot_bgcolor=_plot_bg,
-        font=dict(color="#111827", family="Arial"),
-        xaxis=dict(gridcolor="#E5E7EB", zerolinecolor="#E5E7EB"),
-        yaxis=dict(gridcolor="#E5E7EB", zerolinecolor="#E5E7EB"),
-        legend=dict(bgcolor="rgba(255,255,255,0.0)"),
-    )
-)
-pio.templates.default = "dashboard_clean"
-
 # CSS 스타일링
 st.markdown("""
 <style>
-    /* ====== App background (soft cool-gray to match KPI cards) ====== */
-    html, body, .stApp, [data-testid="stAppViewContainer"] {
-        background-color: #F0F4F8;
-    }
-    [data-testid="stHeader"] { background: transparent; }
-
     [data-testid="metric.container"] {
         background-color: #f0f4f8;
         border-radius: 10px;
@@ -1162,11 +1141,10 @@ st.markdown("""
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
     .kpi-card {
-        background-color: #ffffffcc;
-        border: 1px solid #E5E7EB;
+        background-color: #f0f4f8;
         border-radius: 12px;
         padding: 16px 16px;
-        box-shadow: 0 2px 10px rgba(15,23,42,0.06);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         height: 100%;
     }
     .kpi-head {
