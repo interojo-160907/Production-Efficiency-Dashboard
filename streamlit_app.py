@@ -3,9 +3,11 @@ from pathlib import Path
 import calendar
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
+import base64
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 import plotly.graph_objects as go
 import plotly.express as px
 import io
@@ -3436,19 +3438,40 @@ try:
                 with ctl_l:
                     show_tables = st.toggle("공장별 요약/상세 테이블 보기", value=False)
                 with ctl_r:
-                    prep_key = f"balance_export_prep_{start_date}_{end_date}"
-                    if st.button("다운로드 준비", use_container_width=True):
-                        summary_view, det_show = build_balance_tables_for_export(proc, det)
-                        st.session_state[prep_key] = build_two_sheet_excel(summary_view, det_show, sheet1="공장별요약", sheet2="상세테이블")
-                    st.download_button(
-                        "요약+상세 다운로드",
-                        data=st.session_state.get(prep_key, b""),
-                        file_name=f"공정밸런스_요약+상세_{start_date}_{end_date}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        disabled=prep_key not in st.session_state,
-                        use_container_width=True,
-                        type="primary",
-                    )
+                    if st.button("요약+상세 다운로드 (xlsx)", use_container_width=True, type="primary"):
+                        with st.spinner("다운로드 파일 준비 중..."):
+                            summary_view, det_show = build_balance_tables_for_export(proc, det)
+                            data = build_two_sheet_excel(summary_view, det_show, sheet1="공장별요약", sheet2="상세테이블")
+                        b64 = base64.b64encode(data).decode("ascii")
+                        fname = f"공정밸런스_요약+상세_{start_date}_{end_date}.xlsx"
+                        # one-click download (auto-trigger via JS). Fallback: show a normal download button.
+                        components.html(
+                            f"""
+                            <script>
+                              const b64 = "{b64}";
+                              const byteChars = atob(b64);
+                              const byteNums = new Array(byteChars.length);
+                              for (let i = 0; i < byteChars.length; i++) byteNums[i] = byteChars.charCodeAt(i);
+                              const blob = new Blob([new Uint8Array(byteNums)], {{type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}});
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement("a");
+                              a.href = url;
+                              a.download = "{fname}";
+                              document.body.appendChild(a);
+                              a.click();
+                              a.remove();
+                              setTimeout(() => URL.revokeObjectURL(url), 1000);
+                            </script>
+                            """,
+                            height=0,
+                        )
+                        st.download_button(
+                            "다운로드가 안 되면 여기 클릭",
+                            data=data,
+                            file_name=fname,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                        )
 
                 if show_tables:
                     summary_view, det_show = build_balance_tables_for_export(proc, det)
