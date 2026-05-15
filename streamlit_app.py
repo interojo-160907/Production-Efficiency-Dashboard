@@ -2876,10 +2876,14 @@ try:
                         "</div>",
                         unsafe_allow_html=True,
                     )
-                    proc_qty_cols = [c for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량"] if c in proc_acs.columns]
+                    # 공정별 비교는 '정확대응비중' vs '(초과생산비중+비정형생산비중)'을 100%로 정규화해서 표현
                     proc_comp = (
-                        proc_acs.groupby(["공장그룹", "공정"], dropna=False)[proc_qty_cols].sum().reset_index()
-                        if proc_qty_cols else pd.DataFrame(columns=["공장그룹", "공정"])
+                        proc_acs.groupby(["공장그룹", "공정"], dropna=False)[
+                            [c for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량"] if c in proc_acs.columns]
+                        ]
+                        .sum()
+                        .reset_index()
+                        if len(proc_acs) > 0 else pd.DataFrame(columns=["공장그룹", "공정"])
                     )
                     for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량"]:
                         if c in proc_comp.columns:
@@ -2887,17 +2891,22 @@ try:
                         else:
                             proc_comp[c] = 0.0
 
-                    proc_comp["정확(%)"] = np.where(proc_comp["실적수량"] > 0, proc_comp["유효생산량"] / proc_comp["실적수량"] * 100, 0.0)
-                    proc_comp["초과+비정형(%)"] = np.where(
+                    proc_comp["정확대응비중(%)"] = np.where(
+                        proc_comp["실적수량"] > 0,
+                        proc_comp["유효생산량"] / proc_comp["실적수량"] * 100,
+                        0.0,
+                    )
+                    proc_comp["초과+비정형비중(%)"] = np.where(
                         proc_comp["실적수량"] > 0,
                         (proc_comp["과생산량"] + proc_comp["불필요생산량"]) / proc_comp["실적수량"] * 100,
                         0.0,
                     )
-                    proc_comp["정확(%)"] = pd.to_numeric(proc_comp["정확(%)"], errors="coerce").fillna(0).clip(0, 100)
-                    proc_comp["초과+비정형(%)"] = pd.to_numeric(proc_comp["초과+비정형(%)"], errors="coerce").fillna(0).clip(0, 100)
-                    # 100%로 정규화(잔여는 정확으로 흡수)
-                    proc_comp["초과+비정형(%)"] = np.minimum(proc_comp["초과+비정형(%)"], 100.0)
-                    proc_comp["정확(%)"] = (100.0 - proc_comp["초과+비정형(%)"]).clip(0, 100)
+                    proc_comp["정확대응비중(%)"] = pd.to_numeric(proc_comp["정확대응비중(%)"], errors="coerce").fillna(0).clip(0, 100)
+                    proc_comp["초과+비정형비중(%)"] = pd.to_numeric(proc_comp["초과+비정형비중(%)"], errors="coerce").fillna(0).clip(0, 300)
+
+                    _den = (proc_comp["정확대응비중(%)"] + proc_comp["초과+비정형비중(%)"]).replace(0, np.nan)
+                    proc_comp["정확(%)"] = (proc_comp["정확대응비중(%)"] / _den * 100.0).fillna(0.0).clip(0, 100)
+                    proc_comp["초과+비정형(%)"] = (proc_comp["초과+비정형비중(%)"] / _den * 100.0).fillna(0.0).clip(0, 100)
 
                     proc_comp["공정"] = pd.Categorical(proc_comp["공정"].astype(str), categories=target_order, ordered=True)
                     proc_comp = proc_comp[proc_comp["공정"].notna()].copy()
@@ -2911,14 +2920,14 @@ try:
                                 st.info("공정별 데이터 없음")
                                 continue
 
-                            base = sub[["공정", "정확(%)", "초과+비정형(%)"]].copy()
+                            base = sub[["공정", "정확(%)", "초과+비정형(%)", "정확대응비중(%)", "초과+비정형비중(%)"]].copy()
                             base["공정"] = base["공정"].astype(str)
                             long_df = pd.concat(
                                 [
-                                    base.rename(columns={"정확(%)": "비중"})
-                                    .assign(구분="정확")[["공정", "구분", "비중"]],
-                                    base.rename(columns={"초과+비정형(%)": "비중"})
-                                    .assign(구분="초과+비정형")[["공정", "구분", "비중"]],
+                                    base.rename(columns={"정확(%)": "비중", "정확대응비중(%)": "원본비중"})
+                                    .assign(구분="정확")[["공정", "구분", "비중", "원본비중"]],
+                                    base.rename(columns={"초과+비정형(%)": "비중", "초과+비정형비중(%)": "원본비중"})
+                                    .assign(구분="초과+비정형")[["공정", "구분", "비중", "원본비중"]],
                                 ],
                                 ignore_index=True,
                             )
@@ -2939,7 +2948,8 @@ try:
                                 insidetextanchor="middle",
                                 textfont=dict(size=14, family="Arial", color="#0B1220"),
                                 cliponaxis=False,
-                                hovertemplate="%{y}<br>%{legendgroup}=%{x:.1f}%<extra></extra>",
+                                customdata=long_df["원본비중"],
+                                hovertemplate="%{y}<br>%{legendgroup}=%{x:.1f}%<br>원본=%{customdata:.1f}%<extra></extra>",
                             )
                             fig_bar.update_layout(
                                 height=240,
