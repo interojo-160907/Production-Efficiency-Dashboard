@@ -2820,6 +2820,7 @@ try:
                             "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#F59E0B; display:inline-block;'></span><b>비정형</b></div>"
                             "</div>"
                             "</div>"
+                            "<div style='height:300px;'></div>"
                             "<div style='padding:12px 12px; border:1px solid #E5E7EB; border-radius:12px; background:#F9FAFB;'>"
                             "<div style='font-weight:800; color:#111827; margin-bottom:10px;'>범례(공정비교)</div>"
                             "<div style='display:flex; flex-direction:column; gap:10px;'>"
@@ -2977,7 +2978,9 @@ try:
                                 yaxis=dict(title=None, tickfont=dict(size=13, family="Arial", color="#111827")),
                                 uniformtext_minsize=12,
                                 uniformtext_mode="hide",
+                                barcornerradius=10,
                             )
+                            fig_bar.update_traces(marker_line_width=0)
                             st.plotly_chart(fig_bar, use_container_width=True)
 
                 st.markdown("#### 공장별 요약")
