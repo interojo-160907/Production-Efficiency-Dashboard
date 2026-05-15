@@ -2640,12 +2640,13 @@ try:
                 # 공장별(좌) + 공정별(우) 한 행 배치
                 c_left, c_right = st.columns([1, 2], gap="large")
 
+                # 공정 팔레트(레퍼런스 톤): 인디고/시안/민트/앰버/핑크레드
                 proc_color_map = {
-                    "사출": "#2563EB",
-                    "분리": "#06B6D4",
-                    "하드레이션": "#10B981",
-                    "접착": "#F59E0B",
-                    "누수규격": "#EF4444",
+                    "사출": "#6366F1",
+                    "분리": "#22D3EE",
+                    "하드레이션": "#34D399",
+                    "접착": "#FBBF24",
+                    "누수규격": "#F43F5E",
                 }
                 factory_display = {"A관": "A관(1공장)", "C관": "C관(2공장)", "S관": "S관(3공장)"}
                 chart_height = 520
@@ -2677,9 +2678,9 @@ try:
                             color="공장",
                             text="종합점수",
                             color_discrete_map={
-                                factory_display["A관"]: "#0B62F1",
-                                factory_display["C관"]: "#7CC2FF",
-                                factory_display["S관"]: "#FF2D2D",
+                                factory_display["A관"]: "#6366F1",
+                                factory_display["C관"]: "#8B5CF6",
+                                factory_display["S관"]: "#EC4899",
                             },
                         )
                         fig_factory.update_traces(
