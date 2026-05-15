@@ -2760,6 +2760,23 @@ try:
                     if len(proc_acs) == 0:
                         st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
                     else:
+                        def _majority_grade(grades: list[str]) -> str:
+                            grade_rank = {"양호": 3, "주의": 2, "경고": 1, "위험": 0}
+                            inv_grade_rank = {v: k for k, v in grade_rank.items()}
+                            counts: dict[str, int] = {}
+                            for g in grades:
+                                counts[g] = counts.get(g, 0) + 1
+                            majority = next((g for g, n in counts.items() if n >= 3), None)
+                            if majority is not None:
+                                picked = majority
+                            else:
+                                max_n = max(counts.values()) if counts else 0
+                                top_grades = [g for g, n in counts.items() if n == max_n]
+                                picked = inv_grade_rank[min(grade_rank.get(g, 0) for g in top_grades)] if top_grades else "위험"
+                            if "위험" in grades and picked in {"양호", "주의"}:
+                                picked = "경고"
+                            return picked
+
                         by_factory = (
                             proc_acs.groupby("공장그룹", dropna=False)
                             .apply(
@@ -2773,6 +2790,25 @@ try:
                         by_factory = by_factory.sort_values("공장그룹")
                         by_factory["공장"] = by_factory["공장그룹"].astype(str).map(factory_display)
 
+                        # 공장별 종합 등급(공정 5개 등급의 다수결)
+                        by_fac_proc_scores = (
+                            proc_acs.groupby(["공장그룹", "공정"], dropna=False)
+                            .apply(
+                                lambda g: (g["공정점수"] * pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0)).sum()
+                                / max(float(pd.to_numeric(g.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0).sum()), 1.0)
+                            )
+                            .rename("평균점수")
+                            .reset_index()
+                        )
+                        by_fac_proc_scores["평균점수"] = pd.to_numeric(by_fac_proc_scores["평균점수"], errors="coerce").fillna(0)
+                        fac_grade_map: dict[str, str] = {}
+                        for fg in factory_order:
+                            subp = by_fac_proc_scores[by_fac_proc_scores["공장그룹"].astype(str) == str(fg)]
+                            grades = [_grade(float(subp[subp["공정"].astype(str) == p]["평균점수"].mean())) for p in target_order]
+                            fac_grade_map[str(fg)] = _majority_grade(grades)
+                        by_factory["등급"] = by_factory["공장그룹"].astype(str).map(fac_grade_map).fillna("위험")
+                        by_factory["표시"] = by_factory.apply(lambda r: f"{float(r['종합점수']):.1f}\n({r['등급']})", axis=1)
+
                         fig_factory = px.bar(
                             by_factory,
                             x="공장",
@@ -2780,7 +2816,7 @@ try:
                             range_y=[0, 100],
                             category_orders={"공장": [factory_display[k] for k in factory_order]},
                             color="공장",
-                            text="종합점수",
+                            text="표시",
                             color_discrete_map={
                                 factory_display["A관"]: "#6366F1",
                                 factory_display["C관"]: "#8B5CF6",
@@ -2788,9 +2824,9 @@ try:
                             },
                         )
                         fig_factory.update_traces(
-                            texttemplate="<b>%{text:.1f}</b>",
+                            texttemplate="%{text}",
                             textposition="outside",
-                            textfont=dict(size=32, family="Arial", color="#111827"),
+                            textfont=dict(size=18, family="Arial", color="#111827"),
                             marker=dict(cornerradius=18),
                             hovertemplate="공장=%{x}<br>종합점수=%{y:.1f}<extra></extra>",
                             cliponaxis=False,
@@ -2807,10 +2843,13 @@ try:
                                 title_font=dict(size=18, family="Arial", color="#111827"),
                             ),
                             yaxis=dict(
+                                range=[0, 110],
                                 tickfont=dict(size=14, family="Arial", color="#111827"),
                                 title_font=dict(size=18, family="Arial", color="#111827"),
                                 automargin=True,
                             ),
+                            uniformtext_minsize=10,
+                            uniformtext_mode="hide",
                         )
                         st.plotly_chart(fig_factory, use_container_width=True)
 
@@ -2832,6 +2871,8 @@ try:
                         by_fac_proc["평균점수"] = pd.to_numeric(by_fac_proc["평균점수"], errors="coerce").fillna(0)
                         by_fac_proc["공정"] = pd.Categorical(by_fac_proc["공정"], categories=target_order, ordered=True)
                         by_fac_proc = by_fac_proc.sort_values(["공장그룹", "공정"])
+                        by_fac_proc["등급"] = by_fac_proc["평균점수"].apply(lambda v: _grade(float(v)))
+                        by_fac_proc["표시"] = by_fac_proc.apply(lambda r: f"{float(r['평균점수']):.1f}\n({r['등급']})", axis=1)
 
                         fig_fac = px.bar(
                             by_fac_proc,
@@ -2842,15 +2883,17 @@ try:
                             facet_row_spacing=0.10,
                             category_orders={"공장그룹": factory_order, "공정": target_order},
                             range_y=[0, 100],
-                            text="평균점수",
+                            text="표시",
                             color_discrete_map=proc_color_map,
+                            custom_data=["등급"],
                         )
                         fig_fac.update_traces(
                             marker=dict(cornerradius=14),
-                            texttemplate="<b>%{text:.1f}</b>",
+                            texttemplate="%{text}",
                             textposition="outside",
-                            textfont=dict(size=22, family="Arial", color="#111827"),
+                            textfont=dict(size=14, family="Arial", color="#111827"),
                             cliponaxis=False,
+                            hovertemplate="공정=%{x}<br>점수=%{y:.1f}<br>등급=%{customdata[0]}<extra></extra>",
                         )
                         fig_fac.update_layout(
                             height=chart_height,
