@@ -2966,9 +2966,8 @@ try:
                                     marker=dict(colors=[donut_colors["초과"], donut_colors["비정형"]]),
                                     textinfo="none",
                                     texttemplate="%{percent:.1%}",
-                                    textposition="inside",
-                                    insidetextorientation="horizontal",
-                                    textfont=dict(size=26, family="Arial Black", color="#0B1220"),
+                                    textposition="outside",
+                                    outsidetextfont=dict(size=24, family="Arial Black", color="#0B1220"),
                                     hovertemplate="%{label}<br>비중=%{percent}<br>실적대비=%{customdata:.1f}%<extra></extra>",
                                     customdata=[over, waste],
                                 )
@@ -3033,7 +3032,7 @@ try:
                     proc_comp = proc_comp[proc_comp["공정"].notna()].copy()
                     proc_comp = proc_comp.sort_values("공정")
 
-                    # 공정비교(가로막대) 행: 별도 컬럼을 만들어 공정비교 범례를 막대와 같은 높이로 맞춤
+                    # 공정비교(가로막대) 행: Plotly로 렌더링해 빠른 hover 사용
                     bar_row_cols = st.columns([1, 1, 1, 0.55], gap="large")
                     with bar_row_cols[3]:
                         bar_legend_html = f"""
@@ -3048,6 +3047,7 @@ try:
                         """
                         st.markdown(bar_legend_html, unsafe_allow_html=True)
 
+                    bar_colors = {"정확": BALANCE_COLORS["정확"], "초과+비정형": BALANCE_COLORS["초과+비정형"]}
                     for idx, g in enumerate(factory_order):
                         with bar_row_cols[idx]:
                             sub = proc_comp[proc_comp["공장그룹"].astype(str) == str(g)].copy()
@@ -3057,28 +3057,46 @@ try:
 
                             base = sub[["공정", "정확(%)", "초과+비정형(%)"]].copy()
                             base["공정"] = base["공정"].astype(str)
-
-                            # Plotly stacked bar는 좌측 라운딩이 제한적이라, HTML 막대로 표현(양끝 라운드)
-                            rows_html: list[str] = []
-                            for _, r in base.iterrows():
-                                proc_name = str(r["공정"])
-                                p_ok = float(pd.to_numeric(r.get("정확(%)", 0), errors="coerce"))
-                                p_bad = float(pd.to_numeric(r.get("초과+비정형(%)", 0), errors="coerce"))
-                                p_ok = max(0.0, min(100.0, p_ok))
-                                p_bad = max(0.0, min(100.0, p_bad))
-                                tooltip = f"{proc_name} | 정확 {p_ok:.1f}% / 초과+비정형 {p_bad:.1f}%"
-                                rows_html.append(
-                                    "<div style='display:flex; align-items:center; gap:10px; margin:10px 0;'>"
-                                    f"<div style='width:72px; color:#111827; font-size:13px;'>{proc_name}</div>"
-                                    f"<div title='{tooltip}' style='flex:1; height:28px; border-radius:14px; background:#E5E7EB; overflow:hidden; cursor:help;'>"
-                                    "<div style='display:flex; height:100%; width:100%;'>"
-                                    f"<div title='정확 {p_ok:.1f}%' style='width:{p_ok:.2f}%; background:{BALANCE_COLORS['정확']}; display:flex; align-items:center; justify-content:center; font-size:14px; color:white; font-weight:800; border-top-left-radius:14px; border-bottom-left-radius:14px;'>{p_ok:.1f}%</div>"
-                                    f"<div title='초과+비정형 {p_bad:.1f}%' style='width:{p_bad:.2f}%; background:{BALANCE_COLORS['초과+비정형']}; display:flex; align-items:center; justify-content:center; font-size:14px; color:white; font-weight:800; border-top-right-radius:14px; border-bottom-right-radius:14px;'>{p_bad:.1f}%</div>"
-                                    "</div>"
-                                    "</div>"
-                                    "</div>"
-                                )
-                            st.markdown("".join(rows_html), unsafe_allow_html=True)
+                            long_df = pd.concat(
+                                [
+                                    base.rename(columns={"정확(%)": "비중"})
+                                    .assign(구분="정확")[["공정", "구분", "비중"]],
+                                    base.rename(columns={"초과+비정형(%)": "비중"})
+                                    .assign(구분="초과+비정형")[["공정", "구분", "비중"]],
+                                ],
+                                ignore_index=True,
+                            )
+                            fig_bar = px.bar(
+                                long_df,
+                                y="공정",
+                                x="비중",
+                                color="구분",
+                                orientation="h",
+                                barmode="stack",
+                                category_orders={"공정": target_order, "구분": ["정확", "초과+비정형"]},
+                                color_discrete_map=bar_colors,
+                                text="비중",
+                            )
+                            fig_bar.update_traces(
+                                texttemplate="%{x:.1f}%",
+                                textposition="inside",
+                                insidetextanchor="middle",
+                                textfont=dict(size=14, family="Arial Black", color="#FFFFFF"),
+                                cliponaxis=False,
+                                hovertemplate="%{y}<br>%{legendgroup}=%{x:.1f}%<extra></extra>",
+                            )
+                            fig_bar.update_layout(
+                                height=240,
+                                margin=dict(l=0, r=0, t=10, b=10),
+                                showlegend=False,
+                                xaxis=dict(range=[-1, 100], visible=False),
+                                yaxis=dict(title=None, tickfont=dict(size=13, family="Arial", color="#111827")),
+                                uniformtext_minsize=12,
+                                uniformtext_mode="hide",
+                                barcornerradius=14,
+                            )
+                            fig_bar.update_traces(marker_line_width=0)
+                            st.plotly_chart(fig_bar, use_container_width=True)
 
                 st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
                 st.markdown("#### 공장별 요약")
