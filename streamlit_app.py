@@ -2807,7 +2807,7 @@ try:
                             grades = [_grade(float(subp[subp["공정"].astype(str) == p]["평균점수"].mean())) for p in target_order]
                             fac_grade_map[str(fg)] = _majority_grade(grades)
                         by_factory["등급"] = by_factory["공장그룹"].astype(str).map(fac_grade_map).fillna("위험")
-                        by_factory["표시"] = by_factory.apply(lambda r: f"{float(r['종합점수']):.1f}\n({r['등급']})", axis=1)
+                        by_factory["표시"] = by_factory["종합점수"].apply(lambda v: f"{float(v):.1f}")
 
                         fig_factory = px.bar(
                             by_factory,
@@ -2826,11 +2826,26 @@ try:
                         fig_factory.update_traces(
                             texttemplate="%{text}",
                             textposition="outside",
-                            textfont=dict(size=18, family="Arial", color="#111827"),
+                            textfont=dict(size=32, family="Arial", color="#111827"),
                             marker=dict(cornerradius=18),
                             hovertemplate="공장=%{x}<br>종합점수=%{y:.1f}<extra></extra>",
                             cliponaxis=False,
                         )
+                        # grade label (small) under the big number
+                        try:
+                            fig_factory.add_trace(
+                                go.Scatter(
+                                    x=by_factory["공장"],
+                                    y=by_factory["종합점수"] + 6,
+                                    text=by_factory["등급"].apply(lambda g: f"({g})"),
+                                    mode="text",
+                                    textfont=dict(size=14, family="Arial", color="#6B7280"),
+                                    hoverinfo="skip",
+                                    showlegend=False,
+                                )
+                            )
+                        except Exception:
+                            pass
 
                         fig_factory.update_layout(
                             height=chart_height,
@@ -2872,7 +2887,7 @@ try:
                         by_fac_proc["공정"] = pd.Categorical(by_fac_proc["공정"], categories=target_order, ordered=True)
                         by_fac_proc = by_fac_proc.sort_values(["공장그룹", "공정"])
                         by_fac_proc["등급"] = by_fac_proc["평균점수"].apply(lambda v: _grade(float(v)))
-                        by_fac_proc["표시"] = by_fac_proc.apply(lambda r: f"{float(r['평균점수']):.1f}\n({r['등급']})", axis=1)
+                        by_fac_proc["표시"] = by_fac_proc["평균점수"].apply(lambda v: f"{float(v):.1f}")
 
                         fig_fac = px.bar(
                             by_fac_proc,
@@ -2891,10 +2906,31 @@ try:
                             marker=dict(cornerradius=14),
                             texttemplate="%{text}",
                             textposition="outside",
-                            textfont=dict(size=14, family="Arial", color="#111827"),
+                            textfont=dict(size=22, family="Arial", color="#111827"),
                             cliponaxis=False,
                             hovertemplate="공정=%{x}<br>점수=%{y:.1f}<br>등급=%{customdata[0]}<extra></extra>",
                         )
+                        # grade labels under numbers (small): add as annotations per bar to avoid overlap
+                        try:
+                            for _, r in by_fac_proc.iterrows():
+                                row_key = str(r.get("공장그룹"))
+                                # facet row annotations use yref='paper' domains; easier: use x/y in data coordinates with correct subplot.
+                                # Use Plotly's facet naming convention: row order follows factory_order.
+                                row_idx = factory_order.index(row_key) + 1 if row_key in factory_order else 1
+                                # subplot yaxis name: y, y2, y3... for rows in facet_row (top to bottom)
+                                xaxis_name = "x" if row_idx == 1 else f"x{row_idx}"
+                                yaxis_name = "y" if row_idx == 1 else f"y{row_idx}"
+                                fig_fac.add_annotation(
+                                    x=str(r["공정"]),
+                                    y=float(r["평균점수"]) + 4.5,
+                                    text=f"({r['등급']})",
+                                    showarrow=False,
+                                    font=dict(size=12, family="Arial", color="#6B7280"),
+                                    xref=xaxis_name,
+                                    yref=yaxis_name,
+                                )
+                        except Exception:
+                            pass
                         fig_fac.update_layout(
                             height=chart_height,
                             margin=dict(l=230, r=10, t=30, b=10),
