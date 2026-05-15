@@ -13,6 +13,40 @@ from xlsxwriter.utility import xl_rowcol_to_cell
 import textwrap
 
 
+# ====== Dashboard color system (global) ======
+# 목표: 생산운영현황/공정밸런스 탭 간 색상 통일(공장/의미색)
+FACTORY_COLOR_MAP = {
+    # 공장 라벨이 여러 형태로 등장할 수 있어 키를 넓게 잡음
+    "A관": "#6366F1",  # indigo
+    "A관(1공장)": "#6366F1",
+    "C관": "#8B5CF6",  # violet
+    "C관(2공장)": "#8B5CF6",
+    "S관": "#EC4899",  # pink
+    "S관(3공장)": "#EC4899",
+}
+
+BALANCE_COLORS = {
+    "정확": "#7C3AED",  # purple
+    "초과": "#F43F5E",  # rose
+    # 비정형은 살짝 톤다운(너무 튀는 주황 방지)
+    "비정형": "#FB923C",  # soft orange
+    "초과+비정형": "#F43F5E",
+}
+
+
+def _factory_color_discrete_map(factories: list[str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for f in factories:
+        key = str(f)
+        if "A관" in key:
+            out[key] = FACTORY_COLOR_MAP["A관"]
+        elif "C관" in key:
+            out[key] = FACTORY_COLOR_MAP["C관"]
+        elif "S관" in key:
+            out[key] = FACTORY_COLOR_MAP["S관"]
+    return out
+
+
 def _safe_sheet_name(name: str) -> str:
     name = str(name).strip().replace("/", "_").replace("\\", "_").replace(":", "_")
     if not name:
@@ -567,7 +601,42 @@ def _build_factory_bar_fig(*, factory_data: pd.DataFrame, metric_option: str) ->
 
     table_cols = ["공장", "총실적", pcs_col, metric_col, "선택지표"]
     table_cols = [c for c in table_cols if c in df.columns]
-    return df[table_cols].copy(), None
+    # Export/UI 공통 컬러(공장별)
+    factories = [f for f in df.get("공장", pd.Series([], dtype="object")).dropna().astype(str).unique().tolist()]
+    color_map = _factory_color_discrete_map(factories)
+
+    try:
+        fig = px.bar(
+            df,
+            x="공장",
+            y="선택지표",
+            color="공장",
+            title=f"공장별 {metric_option} (%)",
+            text="선택지표",
+            color_discrete_map=color_map if color_map else None,
+        )
+        fig.update_traces(
+            texttemplate="%{text:.1f}%",
+            textposition="outside",
+            textfont=dict(size=24, family="Arial", color="#222222"),
+            marker=dict(cornerradius="15"),
+            cliponaxis=False,
+        )
+        fig.update_layout(
+            height=520,
+            showlegend=False,
+            margin=dict(l=0, r=0, t=60, b=0),
+            yaxis=dict(range=[0, 105], title=dict(text=f"{metric_option} (%)", font=dict(size=16, family="Arial", color="#222222"))),
+            xaxis=dict(
+                title=dict(text="공장", font=dict(size=16, family="Arial", color="#222222")),
+                tickfont=dict(size=18, family="Arial", color="#222222"),
+            ),
+            title=dict(font=dict(size=22, family="Arial", color="#111111")),
+        )
+    except Exception:
+        fig = None
+
+    return df[table_cols].copy(), fig
 
 
 def _build_factory_line_fig(
@@ -681,6 +750,7 @@ def _build_factory_line_fig(
     label_map = {pd.Timestamp(v): t for v, t in zip(tickvals, ticktext, strict=False)}
     ts_df["x_label"] = ts_df["기간"].map(label_map)
 
+    color_map = _factory_color_discrete_map(factories)
     line_fig = px.line(
         ts_df,
         x="기간",
@@ -689,6 +759,7 @@ def _build_factory_line_fig(
         title=f"공장별 {metric_option} 추이",
         markers=False,
         custom_data=["x_label"],
+        color_discrete_map=color_map if color_map else None,
     )
     line_fig.update_traces(line=dict(width=3.5), hovertemplate="공장=%{legendgroup}<br>기간=%{customdata[0]}<br>값=%{y:.1f}%<extra></extra>")
     line_fig.update_layout(
@@ -1725,6 +1796,9 @@ try:
             }
             hover_data = {k: v for k, v in hover_data.items() if k in factory_data.columns}
 
+            _factories_ui = [f for f in factory_data["공장"].dropna().astype(str).unique().tolist()]
+            _factory_colors_ui = _factory_color_discrete_map(_factories_ui)
+
             fig = px.bar(
                 factory_data,
                 x="공장",
@@ -1733,6 +1807,7 @@ try:
                 title=f"공장별 {metric_option} (%)",
                 text="선택지표",
                 hover_data=hover_data,
+                color_discrete_map=_factory_colors_ui if _factory_colors_ui else None,
             )
             fig.update_traces(
                 texttemplate="%{text:.1f}%",
@@ -1861,6 +1936,7 @@ try:
                     title=f"공장별 {metric_option} 추이",
                     markers=False,
                     custom_data=["x_label"],
+                    color_discrete_map=_factory_colors_ui if _factory_colors_ui else None,
                 )
                 line_fig.update_traces(
                     line=dict(width=3.5),
@@ -2809,20 +2885,19 @@ try:
 
                     comp_map = {str(r["공장그룹"]): r for _, r in comp.iterrows()}
                     donut_cols = st.columns([1, 1, 1, 0.55], gap="large")
-                    # 컬러 팔레트(공정 밸런스): 보라(정확) + 핑크레드(초과) + 오렌지(비정형)
-                    donut_colors = {"초과": "#F43F5E", "비정형": "#F97316"}
+                    donut_colors = {"초과": BALANCE_COLORS["초과"], "비정형": BALANCE_COLORS["비정형"]}
 
                     with donut_cols[3]:
-                        st.markdown(
-                            "<div style='padding:12px 12px; border:1px solid #E5E7EB; border-radius:12px; background:#F9FAFB;'>"
-                            "<div style='font-weight:800; color:#111827; margin-bottom:10px;'>범례(도넛)</div>"
-                            "<div style='display:flex; flex-direction:column; gap:10px;'>"
-                            "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#F43F5E; display:inline-block;'></span><b>초과</b></div>"
-                            "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#F97316; display:inline-block;'></span><b>비정형</b></div>"
-                            "</div>"
-                            "</div>",
-                            unsafe_allow_html=True,
-                        )
+                        donut_legend_html = f"""
+                        <div style='padding:12px 12px; border:1px solid #E5E7EB; border-radius:12px; background:#F9FAFB;'>
+                          <div style='font-weight:800; color:#111827; margin-bottom:10px;'>범례(도넛)</div>
+                          <div style='display:flex; flex-direction:column; gap:10px;'>
+                            <div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:{BALANCE_COLORS['초과']}; display:inline-block;'></span><b>초과</b></div>
+                            <div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:{BALANCE_COLORS['비정형']}; display:inline-block;'></span><b>비정형</b></div>
+                          </div>
+                        </div>
+                        """
+                        st.markdown(donut_legend_html, unsafe_allow_html=True)
 
                     for idx, g in enumerate(factory_order):
                         row = comp_map.get(str(g))
@@ -2926,16 +3001,16 @@ try:
                     # 공정비교(가로막대) 행: 별도 컬럼을 만들어 공정비교 범례를 막대와 같은 높이로 맞춤
                     bar_row_cols = st.columns([1, 1, 1, 0.55], gap="large")
                     with bar_row_cols[3]:
-                        st.markdown(
-                            "<div style='padding:12px 12px; border:1px solid #E5E7EB; border-radius:12px; background:#F9FAFB;'>"
-                            "<div style='font-weight:800; color:#111827; margin-bottom:10px;'>범례(공정비교)</div>"
-                            "<div style='display:flex; flex-direction:column; gap:10px;'>"
-                            "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#7C3AED; display:inline-block;'></span><b>정확</b></div>"
-                            "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#F43F5E; display:inline-block;'></span><b>초과+비정형</b></div>"
-                            "</div>"
-                            "</div>",
-                            unsafe_allow_html=True,
-                        )
+                        bar_legend_html = f"""
+                        <div style='padding:12px 12px; border:1px solid #E5E7EB; border-radius:12px; background:#F9FAFB;'>
+                          <div style='font-weight:800; color:#111827; margin-bottom:10px;'>범례(공정비교)</div>
+                          <div style='display:flex; flex-direction:column; gap:10px;'>
+                            <div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:{BALANCE_COLORS['정확']}; display:inline-block;'></span><b>정확</b></div>
+                            <div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:{BALANCE_COLORS['초과+비정형']}; display:inline-block;'></span><b>초과+비정형</b></div>
+                          </div>
+                        </div>
+                        """
+                        st.markdown(bar_legend_html, unsafe_allow_html=True)
 
                     for idx, g in enumerate(factory_order):
                         with bar_row_cols[idx]:
@@ -2960,8 +3035,8 @@ try:
                                     f"<div style='width:72px; color:#111827; font-size:13px;'>{proc_name}</div>"
                                     "<div style='flex:1; height:28px; border-radius:14px; background:#E5E7EB; overflow:hidden;'>"
                                     "<div style='display:flex; height:100%; width:100%;'>"
-                                    f"<div style='width:{p_ok:.2f}%; background:#7C3AED; display:flex; align-items:center; justify-content:center; font-size:12px; color:white; font-weight:700; border-top-left-radius:14px; border-bottom-left-radius:14px;'>{p_ok:.0f}%</div>"
-                                    f"<div style='width:{p_bad:.2f}%; background:#F43F5E; display:flex; align-items:center; justify-content:center; font-size:12px; color:white; font-weight:700; border-top-right-radius:14px; border-bottom-right-radius:14px;'>{p_bad:.0f}%</div>"
+                                    f"<div style='width:{p_ok:.2f}%; background:{BALANCE_COLORS['정확']}; display:flex; align-items:center; justify-content:center; font-size:12px; color:white; font-weight:700; border-top-left-radius:14px; border-bottom-left-radius:14px;'>{p_ok:.0f}%</div>"
+                                    f"<div style='width:{p_bad:.2f}%; background:{BALANCE_COLORS['초과+비정형']}; display:flex; align-items:center; justify-content:center; font-size:12px; color:white; font-weight:700; border-top-right-radius:14px; border-bottom-right-radius:14px;'>{p_bad:.0f}%</div>"
                                     "</div>"
                                     "</div>"
                                     "</div>"
