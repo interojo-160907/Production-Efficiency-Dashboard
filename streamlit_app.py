@@ -2832,22 +2832,18 @@ try:
                             hovertemplate="공장=%{x}<br>종합점수=%{y:.1f}<extra></extra>",
                             cliponaxis=False,
                         )
-                        # grade label (small) under the big number
+                        # grade label (small) under the big number (use yshift to avoid overlap)
                         try:
-                            for g_label in ["양호", "주의", "경고", "위험"]:
-                                sub_g = by_factory[by_factory["등급"].astype(str) == g_label].copy()
-                                if len(sub_g) == 0:
-                                    continue
-                                fig_factory.add_trace(
-                                    go.Scatter(
-                                        x=sub_g["공장"],
-                                        y=sub_g["종합점수"] + 6,
-                                        text=sub_g["등급"].apply(lambda g: f"({g})"),
-                                        mode="text",
-                                        textfont=dict(size=14, family="Arial", color=status_color.get(g_label, "#111827")),
-                                        hoverinfo="skip",
-                                        showlegend=False,
-                                    )
+                            for _, r in by_factory.iterrows():
+                                fig_factory.add_annotation(
+                                    x=str(r["공장"]),
+                                    y=float(r["종합점수"]),
+                                    text=f"({r['등급']})",
+                                    showarrow=False,
+                                    xanchor="center",
+                                    yanchor="top",
+                                    yshift=-20,
+                                    font=dict(size=14, family="Arial", color=status_color.get(str(r["등급"]), "#111827")),
                                 )
                         except Exception:
                             pass
@@ -2927,10 +2923,13 @@ try:
                                 yaxis_name = "y" if row_idx == 1 else f"y{row_idx}"
                                 fig_fac.add_annotation(
                                     x=str(r["공정"]),
-                                    y=float(r["평균점수"]) + 4.5,
+                                    y=float(r["평균점수"]),
                                     text=f"({r['등급']})",
                                     showarrow=False,
                                     font=dict(size=12, family="Arial", color=status_color.get(str(r['등급']), "#111827")),
+                                    xanchor="center",
+                                    yanchor="top",
+                                    yshift=-16,
                                     xref=xaxis_name,
                                     yref=yaxis_name,
                                 )
