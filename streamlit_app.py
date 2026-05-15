@@ -2820,7 +2820,6 @@ try:
                             "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#F59E0B; display:inline-block;'></span><b>비정형</b></div>"
                             "</div>"
                             "</div>"
-                            "<div style='height:300px;'></div>"
                             "<div style='padding:12px 12px; border:1px solid #E5E7EB; border-radius:12px; background:#F9FAFB;'>"
                             "<div style='font-weight:800; color:#111827; margin-bottom:10px;'>범례(공정비교)</div>"
                             "<div style='display:flex; flex-direction:column; gap:10px;'>"
@@ -2974,7 +2973,8 @@ try:
                                 height=240,
                                 margin=dict(l=0, r=0, t=10, b=10),
                                 showlegend=False,
-                                xaxis=dict(range=[0, 100], visible=False),
+                                # 왼쪽 둥근 모서리가 x=0에서 클리핑되지 않도록 약간의 여백을 둠
+                                xaxis=dict(range=[-2, 100], visible=False),
                                 yaxis=dict(title=None, tickfont=dict(size=13, family="Arial", color="#111827")),
                                 uniformtext_minsize=12,
                                 uniformtext_mode="hide",
