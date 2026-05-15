@@ -2983,10 +2983,10 @@ try:
                             uniformtext_mode="show",
                             annotations=[
                                 dict(
-                                    text=f"<span style='font-size:16px; font-weight:700; opacity:0.85;'>감점</span><br><b>{penalty_total:.1f}</b>",
+                                    text=f"<span style='font-size:22px; font-weight:900; opacity:0.95;'>감점</span><br><span style='font-size:30px; font-weight:900;'>{penalty_total:.1f}</span>",
                                     x=0.5,
                                     y=0.5,
-                                    font=dict(size=38, family="Arial Black", color="#B91C1C"),
+                                    font=dict(size=30, family="Arial Black", color="#B91C1C"),
                                     showarrow=False,
                                 )
                             ],
@@ -3066,13 +3066,14 @@ try:
                                 p_bad = float(pd.to_numeric(r.get("초과+비정형(%)", 0), errors="coerce"))
                                 p_ok = max(0.0, min(100.0, p_ok))
                                 p_bad = max(0.0, min(100.0, p_bad))
+                                tooltip = f"{proc_name} | 정확 {p_ok:.1f}% / 초과+비정형 {p_bad:.1f}%"
                                 rows_html.append(
                                     "<div style='display:flex; align-items:center; gap:10px; margin:10px 0;'>"
                                     f"<div style='width:72px; color:#111827; font-size:13px;'>{proc_name}</div>"
-                                    "<div style='flex:1; height:28px; border-radius:14px; background:#E5E7EB; overflow:hidden;'>"
+                                    f"<div title='{tooltip}' style='flex:1; height:28px; border-radius:14px; background:#E5E7EB; overflow:hidden; cursor:help;'>"
                                     "<div style='display:flex; height:100%; width:100%;'>"
-                                    f"<div style='width:{p_ok:.2f}%; background:{BALANCE_COLORS['정확']}; display:flex; align-items:center; justify-content:center; font-size:14px; color:white; font-weight:800; border-top-left-radius:14px; border-bottom-left-radius:14px;'>{p_ok:.1f}%</div>"
-                                    f"<div style='width:{p_bad:.2f}%; background:{BALANCE_COLORS['초과+비정형']}; display:flex; align-items:center; justify-content:center; font-size:14px; color:white; font-weight:800; border-top-right-radius:14px; border-bottom-right-radius:14px;'>{p_bad:.1f}%</div>"
+                                    f"<div title='정확 {p_ok:.1f}%' style='width:{p_ok:.2f}%; background:{BALANCE_COLORS['정확']}; display:flex; align-items:center; justify-content:center; font-size:14px; color:white; font-weight:800; border-top-left-radius:14px; border-bottom-left-radius:14px;'>{p_ok:.1f}%</div>"
+                                    f"<div title='초과+비정형 {p_bad:.1f}%' style='width:{p_bad:.2f}%; background:{BALANCE_COLORS['초과+비정형']}; display:flex; align-items:center; justify-content:center; font-size:14px; color:white; font-weight:800; border-top-right-radius:14px; border-bottom-right-radius:14px;'>{p_bad:.1f}%</div>"
                                     "</div>"
                                     "</div>"
                                     "</div>"
