@@ -2791,6 +2791,7 @@ try:
                     if len(proc_acs) == 0:
                         st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
                     else:
+                        chart_col, legend_col = st.columns([5, 1.2], gap="large")
                         by_fac_proc = (
                             proc_acs.groupby(["공장그룹", "공정"], dropna=False)
                             .apply(
@@ -2826,7 +2827,7 @@ try:
                         fig_fac.update_layout(
                             height=chart_height,
                             margin=dict(l=185, r=10, t=30, b=10),
-                            showlegend=True,
+                            showlegend=False,
                             xaxis_title="공정",
                             yaxis_title=None,
                             legend_title_text="공정",
@@ -2849,13 +2850,30 @@ try:
                         # 구분선(패널 사이)
                         fig_fac.add_shape(type="line", xref="paper", yref="paper", x0=0, x1=1, y0=2/3, y1=2/3, line=dict(color="#E5E7EB", width=2))
                         fig_fac.add_shape(type="line", xref="paper", yref="paper", x0=0, x1=1, y0=1/3, y1=1/3, line=dict(color="#E5E7EB", width=2))
-                        st.plotly_chart(fig_fac, use_container_width=True)
+                        with chart_col:
+                            st.plotly_chart(fig_fac, use_container_width=True)
+                        with legend_col:
+                            legend_items = "".join(
+                                [
+                                    f"<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:{proc_color_map.get(p, '#64748B')}; display:inline-block;'></span><b>{p}</b></div>"
+                                    for p in target_order
+                                ]
+                            )
+                            st.markdown(
+                                "<div style='padding:12px 12px; border:1px solid #E5E7EB; border-radius:12px; background:#F9FAFB;'>"
+                                "<div style='font-weight:800; color:#111827; margin-bottom:10px;'>범례(공정)</div>"
+                                f"<div style='display:flex; flex-direction:column; gap:10px;'>{legend_items}</div>"
+                                "</div>",
+                                unsafe_allow_html=True,
+                            )
 
-                st.markdown("#### 관별 감점 요인(초과/비정형)")
+                st.markdown("<div style='height:26px'></div>", unsafe_allow_html=True)
+                st.markdown("#### 관별 감점 요인")
                 if len(proc_acs) == 0:
                     st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
                 else:
                     from plotly.subplots import make_subplots
+                    st.caption("도넛: 감점요인(초과+비정형) 내 구성비 / 아래: 공정별 (정확 vs 감점요인) 구성비")
 
                     qty_cols = [c for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량"] if c in proc_acs.columns]
                     comp = proc_acs.groupby("공장그룹", dropna=False)[qty_cols].sum().reset_index() if qty_cols else pd.DataFrame()
@@ -2899,6 +2917,7 @@ try:
                         """
                         st.markdown(donut_legend_html, unsafe_allow_html=True)
 
+                    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
                     for idx, g in enumerate(factory_order):
                         row = comp_map.get(str(g))
                         if row is None:
@@ -3035,8 +3054,8 @@ try:
                                     f"<div style='width:72px; color:#111827; font-size:13px;'>{proc_name}</div>"
                                     "<div style='flex:1; height:28px; border-radius:14px; background:#E5E7EB; overflow:hidden;'>"
                                     "<div style='display:flex; height:100%; width:100%;'>"
-                                    f"<div style='width:{p_ok:.2f}%; background:{BALANCE_COLORS['정확']}; display:flex; align-items:center; justify-content:center; font-size:12px; color:white; font-weight:700; border-top-left-radius:14px; border-bottom-left-radius:14px;'>{p_ok:.0f}%</div>"
-                                    f"<div style='width:{p_bad:.2f}%; background:{BALANCE_COLORS['초과+비정형']}; display:flex; align-items:center; justify-content:center; font-size:12px; color:white; font-weight:700; border-top-right-radius:14px; border-bottom-right-radius:14px;'>{p_bad:.0f}%</div>"
+                                    f"<div style='width:{p_ok:.2f}%; background:{BALANCE_COLORS['정확']}; display:flex; align-items:center; justify-content:center; font-size:12px; color:white; font-weight:700; border-top-left-radius:14px; border-bottom-left-radius:14px;'>{p_ok:.1f}%</div>"
+                                    f"<div style='width:{p_bad:.2f}%; background:{BALANCE_COLORS['초과+비정형']}; display:flex; align-items:center; justify-content:center; font-size:12px; color:white; font-weight:700; border-top-right-radius:14px; border-bottom-right-radius:14px;'>{p_bad:.1f}%</div>"
                                     "</div>"
                                     "</div>"
                                     "</div>"
@@ -3106,7 +3125,17 @@ try:
                     ]
                     if c in summary.columns
                 ]
-                st.dataframe(summary[summary_show_cols] if summary_show_cols else summary, use_container_width=True, height=420)
+                _summary_view = summary[summary_show_cols].copy() if summary_show_cols else summary.copy()
+                _summary_fmt: dict[str, str] = {}
+                for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량", "부족수량", "필요수량"]:
+                    if c in _summary_view.columns:
+                        _summary_fmt[c] = "{:,.0f}"
+                for c in _summary_view.columns:
+                    if isinstance(c, str) and c.endswith("(%)"):
+                        _summary_fmt[c] = "{:.1f}"
+                if "공정점수" in _summary_view.columns:
+                    _summary_fmt["공정점수"] = "{:.1f}"
+                st.dataframe(_summary_view.style.format(_summary_fmt), use_container_width=True, height=420)
 
                 st.markdown("#### 상세 테이블")
                 det_show = det.copy()
@@ -3122,7 +3151,11 @@ try:
                     det_show["공장그룹"] = pd.Categorical(det_show["공장그룹"], categories=factory_order + ["기타"], ordered=True)
                 sort_cols = [c for c in ["날짜_date", "공장그룹", "공장", "공정", "신규분류요약"] if c in det_show.columns]
                 det_show = det_show.sort_values(sort_cols, ascending=[True] * len(sort_cols)) if sort_cols else det_show
-                st.dataframe(det_show, use_container_width=True, height=520)
+                _det_fmt: dict[str, str] = {}
+                for c in value_cols:
+                    if c in det_show.columns:
+                        _det_fmt[c] = "{:,.0f}"
+                st.dataframe(det_show.style.format(_det_fmt), use_container_width=True, height=520)
 except Exception as e:
     st.error("❌ 오류가 발생했습니다.")
     st.code(_truncate_err_message(str(e)), language="text")
