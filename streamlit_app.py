@@ -2791,7 +2791,7 @@ try:
                     if len(proc_acs) == 0:
                         st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
                     else:
-                        chart_col, legend_col = st.columns([5, 1.2], gap="large")
+                        chart_col, legend_col = st.columns([6, 1.1], gap="large")
                         by_fac_proc = (
                             proc_acs.groupby(["공장그룹", "공정"], dropna=False)
                             .apply(
@@ -2826,7 +2826,7 @@ try:
                         )
                         fig_fac.update_layout(
                             height=chart_height,
-                            margin=dict(l=185, r=10, t=30, b=10),
+                            margin=dict(l=150, r=10, t=30, b=10),
                             showlegend=False,
                             xaxis_title="공정",
                             yaxis_title=None,
@@ -2839,7 +2839,7 @@ try:
                             if isinstance(ann.text, str) and "공장그룹=" in ann.text:
                                 raw = ann.text.replace("공장그룹=", "")
                                 ann.text = factory_display.get(raw, raw)
-                                ann.x = -0.14
+                                ann.x = -0.08
                                 ann.xanchor = "left"
                                 ann.yanchor = "middle"
                                 ann.textangle = 0
@@ -2868,12 +2868,11 @@ try:
                             )
 
                 st.markdown("<div style='height:26px'></div>", unsafe_allow_html=True)
-                st.markdown("#### 관별 감점 요인")
+                st.markdown("#### 관별 감점요인 · 공정별 생산 비율")
                 if len(proc_acs) == 0:
                     st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
                 else:
                     from plotly.subplots import make_subplots
-                    st.caption("도넛: 감점요인(초과+비정형) 내 구성비 / 아래: 공정별 (정확 vs 감점요인) 구성비")
 
                     qty_cols = [c for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량"] if c in proc_acs.columns]
                     comp = proc_acs.groupby("공장그룹", dropna=False)[qty_cols].sum().reset_index() if qty_cols else pd.DataFrame()
@@ -2909,6 +2908,7 @@ try:
                         donut_legend_html = f"""
                         <div style='padding:12px 12px; border:1px solid #E5E7EB; border-radius:12px; background:#F9FAFB;'>
                           <div style='font-weight:800; color:#111827; margin-bottom:10px;'>범례(도넛)</div>
+                          <div style='color:#6B7280; font-size:12px; margin:-4px 0 10px 0;'>감점요인(초과+비정형) 내 구성비</div>
                           <div style='display:flex; flex-direction:column; gap:10px;'>
                             <div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:{BALANCE_COLORS['초과']}; display:inline-block;'></span><b>초과</b></div>
                             <div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:{BALANCE_COLORS['비정형']}; display:inline-block;'></span><b>비정형</b></div>
@@ -3023,6 +3023,7 @@ try:
                         bar_legend_html = f"""
                         <div style='padding:12px 12px; border:1px solid #E5E7EB; border-radius:12px; background:#F9FAFB;'>
                           <div style='font-weight:800; color:#111827; margin-bottom:10px;'>범례(공정비교)</div>
+                          <div style='color:#6B7280; font-size:12px; margin:-4px 0 10px 0;'>공정별 (정확 vs 감점요인) 구성비</div>
                           <div style='display:flex; flex-direction:column; gap:10px;'>
                             <div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:{BALANCE_COLORS['정확']}; display:inline-block;'></span><b>정확</b></div>
                             <div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:{BALANCE_COLORS['초과+비정형']}; display:inline-block;'></span><b>초과+비정형</b></div>
