@@ -2619,18 +2619,35 @@ try:
                 proc["초과생산비중(%)"] = pd.to_numeric(proc["초과생산비중(%)"], errors="coerce").fillna(0).clip(0, 300)
                 proc["비정형생산비중(%)"] = pd.to_numeric(proc["비정형생산비중(%)"], errors="coerce").fillna(0).clip(0, 300)
 
-                proc["공정점수"] = (
-                    proc["규격대응률(%)"] * 0.25
-                    + proc["정확대응비중(%)"] * 0.45
-                    + (100 - proc["초과생산비중(%)"].clip(0, 100)) * 0.20
-                    + (100 - proc["비정형생산비중(%)"].clip(0, 100)) * 0.10
+                # 공정점수(0~100)
+                # 목표: "필요 대응(규격대응률)"을 가장 중요하게, "비정형" 감점을 더 강하게 반영
+                #  - 규격대응률(%)      : 필요가 있었던 SKU를 생산했는가(했냐/안했냐 성격)
+                #  - 정확대응비중(%)    : 수량 관점의 대응 정도
+                #  - 초과/비정형비중(%) : 불필요 생산에 대한 감점 (비정형 가중↑)
+                proc["공정점수_raw"] = (
+                    proc["규격대응률(%)"] * 0.45
+                    + proc["정확대응비중(%)"] * 0.25
+                    + (100 - proc["초과생산비중(%)"].clip(0, 100)) * 0.10
+                    + (100 - proc["비정형생산비중(%)"].clip(0, 100)) * 0.20
                 ).clip(0, 100)
+                # 규격대응률이 낮으면(필요 대응 자체가 안 됨) 점수 상한을 낮춰 "했냐/안했냐"를 강조
+                cap = np.select(
+                    [
+                        proc["규격대응률(%)"] >= 85,
+                        proc["규격대응률(%)"] >= 70,
+                        proc["규격대응률(%)"] >= 55,
+                    ],
+                    [100.0, 85.0, 70.0],
+                    default=55.0,
+                )
+                proc["공정점수"] = np.minimum(proc["공정점수_raw"], cap).clip(0, 100)
 
+                # 등급(분포가 너무 낮게 깔리는 것을 방지하기 위해 기준을 현실화)
                 proc["상태"] = np.select(
                     [
-                        proc["공정점수"] >= 90,
-                        proc["공정점수"] >= 80,
+                        proc["공정점수"] >= 85,
                         proc["공정점수"] >= 70,
+                        proc["공정점수"] >= 55,
                     ],
                     ["양호", "주의", "경고"],
                     default="위험",
@@ -2652,9 +2669,9 @@ try:
                 risk_count = int((by_proc["평균점수"] < 70).sum()) if len(by_proc) else 0
 
                 overall_status = (
-                    "양호" if overall >= 90 else
-                    "주의" if overall >= 80 else
-                    "경고" if overall >= 70 else
+                    "양호" if overall >= 85 else
+                    "주의" if overall >= 70 else
+                    "경고" if overall >= 55 else
                     "위험"
                 )
                 status_color = {"양호": "#047857", "주의": "#1d4ed8", "경고": "#b45309", "위험": "#b91c1c"}
@@ -2663,11 +2680,11 @@ try:
                 proc_score_map = {str(r["공정"]): float(r["평균점수"]) for _, r in by_proc.iterrows()} if len(by_proc) else {}
 
                 def _grade(score: float) -> str:
-                    if score >= 90:
+                    if score >= 85:
                         return "양호"
-                    if score >= 80:
-                        return "주의"
                     if score >= 70:
+                        return "주의"
+                    if score >= 55:
                         return "경고"
                     return "위험"
 
@@ -2698,13 +2715,12 @@ try:
 
                 with st.expander("지표 정의/상세 보기", expanded=False):
                     st.markdown(
-                        "- `제품명(SKU)` : `제품코드` 앞 5자리(예: `Q1230-...` → `Q1230`)\n"
                         "- `규격대응률(%)` : 일자/공장/공정별 `(필요 SKU ∩ 생산 SKU) ÷ 생산 SKU` 의 비율\n"
                         "- `정확대응비중(%)` : `유효생산량 ÷ 실적수량`\n"
                         "- `초과생산비중(%)` : `과생산량 ÷ 실적수량`\n"
                         "- `비정형생산비중(%)` : `불필요생산량 ÷ 실적수량`\n"
-                        "- `공정점수(0~100)` : `0.25×규격대응률 + 0.45×정확대응비중 + 0.20×(100-초과생산비중) + 0.10×(100-비정형생산비중)`\n"
-                        "- `등급` : 90↑ 양호 / 80↑ 주의 / 70↑ 경고 / 70↓ 위험\n"
+                        "- `공정점수(0~100)` : `0.45×규격대응률 + 0.25×정확대응비중 + 0.10×(100-초과생산비중) + 0.20×(100-비정형생산비중)` (규격대응률이 낮으면 상한 적용)\n"
+                        "- `등급` : 85↑ 양호 / 70↑ 주의 / 55↑ 경고 / 55↓ 위험\n"
                         "- `종합점수(공장/전체)` : 각 `공정점수`의 `실적수량` 가중평균"
                     )
                     st.caption("참고: 공정 밸런스는 `유효생산량_결과2.xlsx`의 `매칭결과` 시트를 기반으로 계산합니다.")
@@ -3097,14 +3113,24 @@ try:
                 summary["정확대응비중(%)"] = pd.to_numeric(summary["정확대응비중(%)"], errors="coerce").fillna(0).clip(0, 100)
                 summary["초과생산비중(%)"] = pd.to_numeric(summary["초과생산비중(%)"], errors="coerce").fillna(0).clip(0, 300)
                 summary["비정형생산비중(%)"] = pd.to_numeric(summary["비정형생산비중(%)"], errors="coerce").fillna(0).clip(0, 300)
-                summary["공정점수"] = (
-                    summary["규격대응률(%)"] * 0.25
-                    + summary["정확대응비중(%)"] * 0.45
-                    + (100 - summary["초과생산비중(%)"].clip(0, 100)) * 0.20
-                    + (100 - summary["비정형생산비중(%)"].clip(0, 100)) * 0.10
+                summary["공정점수_raw"] = (
+                    summary["규격대응률(%)"] * 0.45
+                    + summary["정확대응비중(%)"] * 0.25
+                    + (100 - summary["초과생산비중(%)"].clip(0, 100)) * 0.10
+                    + (100 - summary["비정형생산비중(%)"].clip(0, 100)) * 0.20
                 ).clip(0, 100)
+                cap = np.select(
+                    [
+                        summary["규격대응률(%)"] >= 85,
+                        summary["규격대응률(%)"] >= 70,
+                        summary["규격대응률(%)"] >= 55,
+                    ],
+                    [100.0, 85.0, 70.0],
+                    default=55.0,
+                )
+                summary["공정점수"] = np.minimum(summary["공정점수_raw"], cap).clip(0, 100)
                 summary["상태"] = np.select(
-                    [summary["공정점수"] >= 90, summary["공정점수"] >= 80, summary["공정점수"] >= 70],
+                    [summary["공정점수"] >= 85, summary["공정점수"] >= 70, summary["공정점수"] >= 55],
                     ["양호", "주의", "경고"],
                     default="위험",
                 )
