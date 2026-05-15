@@ -1,6 +1,0 @@
-2026-05-14 18:07:12.112 Starting new event loop for server
-2026-05-14 18:07:12.116 Starting server...
-2026-05-14 18:07:12.118 Serving static content from C:\Users\½É¹Î½Ä\AppData\Local\Programs\Python\Python313\Lib\site-packages\streamlit\static
-2026-05-14 18:07:12.125 Server started on port 8524
-2026-05-14 18:07:12.126 Runtime state: RuntimeState.INITIAL -> RuntimeState.NO_SESSIONS_CONNECTED
-2026-05-14 18:07:12.727 Setting up signal handler
