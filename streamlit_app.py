@@ -143,6 +143,8 @@ def _apply_table_formats(workbook, worksheet, *, df: pd.DataFrame, startrow: int
         # Width is safe to set at column level (style is not).
         if name in {"날짜", "기간"}:
             worksheet.set_column(c, c, 12)
+        elif name in {"공정점수", "종합점수", "평균점수"} or ("점수" in name):
+            worksheet.set_column(c, c, 12)
         elif "(pcs)" in name or name in {"총실적", "유효생산량", "과생산량", "불필요생산량", "총부족수량", "실적수량", "필요수량", "부족수량"}:
             worksheet.set_column(c, c, 16)
         elif "(%)" in name:
@@ -152,6 +154,8 @@ def _apply_table_formats(workbook, worksheet, *, df: pd.DataFrame, startrow: int
 
         if name in {"날짜", "기간"}:
             fmt = fmt_date
+        elif name in {"공정점수", "종합점수", "평균점수"} or ("점수" in name):
+            fmt = workbook.add_format({"num_format": "0.0"})
         elif "(pcs)" in name or name in {"총실적", "유효생산량", "과생산량", "불필요생산량", "총부족수량", "실적수량", "필요수량", "부족수량"}:
             fmt = fmt_int
         elif "(%)" in name or name in {"선택지표"}:
@@ -187,6 +191,116 @@ def build_two_sheet_excel(summary_df: pd.DataFrame, detail_df: pd.DataFrame, *, 
 
     output.seek(0)
     return output.getvalue()
+
+
+@st.cache_data(show_spinner=False)
+def build_balance_tables_for_export(proc: pd.DataFrame, det: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """공정밸런스 탭 하단 '공장별 요약/상세 테이블' 다운로드용 데이터(집계 완료)를 생성."""
+    target_order = ["사출", "분리", "하드레이션", "접착", "누수규격"]
+    factory_order = ["A관", "C관", "S관"]
+
+    summary = (
+        proc.groupby(["날짜_date", "공장그룹", "공장", "공정"], dropna=False)[
+            [c for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량", "생산SKU수", "필요SKU수", "규격대응SKU수"] if c in proc.columns]
+        ]
+        .sum()
+        .reset_index()
+    )
+    summary["규격대응률(%)"] = np.where(
+        pd.to_numeric(summary.get("생산SKU수", 0), errors="coerce").fillna(0) > 0,
+        pd.to_numeric(summary.get("규격대응SKU수", 0), errors="coerce").fillna(0)
+        / pd.to_numeric(summary.get("생산SKU수", 0), errors="coerce").fillna(0)
+        * 100,
+        0.0,
+    )
+    summary["정확대응비중(%)"] = np.where(
+        pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0) > 0,
+        pd.to_numeric(summary.get("유효생산량", 0), errors="coerce").fillna(0)
+        / pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0)
+        * 100,
+        0.0,
+    )
+    summary["초과생산비중(%)"] = np.where(
+        pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0) > 0,
+        pd.to_numeric(summary.get("과생산량", 0), errors="coerce").fillna(0)
+        / pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0)
+        * 100,
+        0.0,
+    )
+    summary["비정형생산비중(%)"] = np.where(
+        pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0) > 0,
+        pd.to_numeric(summary.get("불필요생산량", 0), errors="coerce").fillna(0)
+        / pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0)
+        * 100,
+        0.0,
+    )
+    for c in ["규격대응률(%)", "정확대응비중(%)", "초과생산비중(%)", "비정형생산비중(%)"]:
+        summary[c] = pd.to_numeric(summary[c], errors="coerce").fillna(0)
+    summary["규격대응률(%)"] = summary["규격대응률(%)"].clip(0, 100)
+    summary["정확대응비중(%)"] = summary["정확대응비중(%)"].clip(0, 100)
+    summary["초과생산비중(%)"] = summary["초과생산비중(%)"].clip(0, 300)
+    summary["비정형생산비중(%)"] = summary["비정형생산비중(%)"].clip(0, 300)
+
+    summary["공정점수_raw"] = (
+        summary["규격대응률(%)"] * 0.45
+        + summary["정확대응비중(%)"] * 0.25
+        + (100 - summary["초과생산비중(%)"].clip(0, 100)) * 0.10
+        + (100 - summary["비정형생산비중(%)"].clip(0, 100)) * 0.20
+    ).clip(0, 100)
+    cap = np.select(
+        [
+            summary["규격대응률(%)"] >= 85,
+            summary["규격대응률(%)"] >= 70,
+            summary["규격대응률(%)"] >= 55,
+        ],
+        [100.0, 75.0, 65.0],
+        default=55.0,
+    )
+    summary["공정점수"] = np.minimum(summary["공정점수_raw"], cap).clip(0, 100)
+    summary["상태"] = np.select(
+        [summary["공정점수"] >= 70, summary["공정점수"] >= 65, summary["공정점수"] >= 60],
+        ["양호", "주의", "경고"],
+        default="위험",
+    )
+    if "공장그룹" in summary.columns:
+        summary["공장그룹"] = pd.Categorical(summary["공장그룹"], categories=factory_order + ["기타"], ordered=True)
+    if "공정" in summary.columns:
+        summary["공정"] = pd.Categorical(summary["공정"], categories=target_order, ordered=True)
+    summary = summary.sort_values(["날짜_date", "공장그룹", "공장", "공정"], ascending=[True, True, True, True])
+
+    summary_show_cols = [
+        c
+        for c in [
+            "날짜_date",
+            "공장",
+            "공정",
+            "실적수량",
+            "규격대응률(%)",
+            "정확대응비중(%)",
+            "초과생산비중(%)",
+            "비정형생산비중(%)",
+            "공정점수",
+            "상태",
+        ]
+        if c in summary.columns
+    ]
+    summary_view = summary[summary_show_cols].copy() if summary_show_cols else summary.copy()
+
+    det_show = det.copy()
+    group_cols = [c for c in ["날짜_date", "공장그룹", "공장", "공정", "신규분류요약"] if c in det_show.columns]
+    value_cols = [c for c in ["실적수량", "필요수량", "부족수량", "유효생산량", "과생산량", "불필요생산량"] if c in det_show.columns]
+    if group_cols and value_cols:
+        det_show = det_show.groupby(group_cols, dropna=False)[value_cols].sum().reset_index()
+    show_cols = [c for c in ["날짜_date", "공장", "공정", "신규분류요약"] if c in det_show.columns] + value_cols
+    det_show = det_show[show_cols].copy() if show_cols else det_show
+    if "공정" in det_show.columns:
+        det_show["공정"] = pd.Categorical(det_show["공정"], categories=target_order, ordered=True)
+    if "공장그룹" in det_show.columns:
+        det_show["공장그룹"] = pd.Categorical(det_show["공장그룹"], categories=factory_order + ["기타"], ordered=True)
+    sort_cols = [c for c in ["날짜_date", "공장그룹", "공장", "공정", "신규분류요약"] if c in det_show.columns]
+    det_show = det_show.sort_values(sort_cols, ascending=[True] * len(sort_cols)) if sort_cols else det_show
+
+    return summary_view.reset_index(drop=True), det_show.reset_index(drop=True)
 
 
 def _write_chart_source_df(
@@ -3318,128 +3432,42 @@ try:
                             st.markdown("".join(rows_html), unsafe_allow_html=True)
 
                 st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
-                show_tables = st.toggle("공장별 요약/상세 테이블 보기", value=False)
+                ctl_l, ctl_r = st.columns([2.2, 1.0])
+                with ctl_l:
+                    show_tables = st.toggle("공장별 요약/상세 테이블 보기", value=False)
+                with ctl_r:
+                    prep_key = f"balance_export_prep_{start_date}_{end_date}"
+                    if st.button("다운로드 준비", use_container_width=True):
+                        summary_view, det_show = build_balance_tables_for_export(proc, det)
+                        st.session_state[prep_key] = build_two_sheet_excel(summary_view, det_show, sheet1="공장별요약", sheet2="상세테이블")
+                    st.download_button(
+                        "요약+상세 다운로드",
+                        data=st.session_state.get(prep_key, b""),
+                        file_name=f"공정밸런스_요약+상세_{start_date}_{end_date}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        disabled=prep_key not in st.session_state,
+                        use_container_width=True,
+                        type="primary",
+                    )
+
                 if show_tables:
-                    # NOTE: expander는 UI만 접고 펼치는 용도라서, 계산도 최대한 이 블록 안에서 수행해 초기 로딩을 가볍게 합니다.
+                    summary_view, det_show = build_balance_tables_for_export(proc, det)
+
                     with st.expander("공장별 요약", expanded=False):
-                        summary = (
-                            proc.groupby(["날짜_date", "공장그룹", "공장", "공정"], dropna=False)[
-                                [c for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량", "생산SKU수", "필요SKU수", "규격대응SKU수"] if c in proc.columns]
-                            ]
-                            .sum()
-                            .reset_index()
-                        )
-                        summary["규격대응률(%)"] = np.where(
-                            pd.to_numeric(summary.get("생산SKU수", 0), errors="coerce").fillna(0) > 0,
-                            pd.to_numeric(summary.get("규격대응SKU수", 0), errors="coerce").fillna(0)
-                            / pd.to_numeric(summary.get("생산SKU수", 0), errors="coerce").fillna(0)
-                            * 100,
-                            0.0,
-                        )
-                        summary["정확대응비중(%)"] = np.where(
-                            pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0) > 0,
-                            pd.to_numeric(summary.get("유효생산량", 0), errors="coerce").fillna(0)
-                            / pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0)
-                            * 100,
-                            0.0,
-                        )
-                        summary["초과생산비중(%)"] = np.where(
-                            pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0) > 0,
-                            pd.to_numeric(summary.get("과생산량", 0), errors="coerce").fillna(0)
-                            / pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0)
-                            * 100,
-                            0.0,
-                        )
-                        summary["비정형생산비중(%)"] = np.where(
-                            pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0) > 0,
-                            pd.to_numeric(summary.get("불필요생산량", 0), errors="coerce").fillna(0)
-                            / pd.to_numeric(summary.get("실적수량", 0), errors="coerce").fillna(0)
-                            * 100,
-                            0.0,
-                        )
-                        summary["규격대응률(%)"] = pd.to_numeric(summary["규격대응률(%)"], errors="coerce").fillna(0).clip(0, 100)
-                        summary["정확대응비중(%)"] = pd.to_numeric(summary["정확대응비중(%)"], errors="coerce").fillna(0).clip(0, 100)
-                        summary["초과생산비중(%)"] = pd.to_numeric(summary["초과생산비중(%)"], errors="coerce").fillna(0).clip(0, 300)
-                        summary["비정형생산비중(%)"] = pd.to_numeric(summary["비정형생산비중(%)"], errors="coerce").fillna(0).clip(0, 300)
-                        summary["공정점수_raw"] = (
-                            summary["규격대응률(%)"] * 0.45
-                            + summary["정확대응비중(%)"] * 0.25
-                            + (100 - summary["초과생산비중(%)"].clip(0, 100)) * 0.10
-                            + (100 - summary["비정형생산비중(%)"].clip(0, 100)) * 0.20
-                        ).clip(0, 100)
-                        cap = np.select(
-                            [
-                                summary["규격대응률(%)"] >= 85,
-                                summary["규격대응률(%)"] >= 70,
-                                summary["규격대응률(%)"] >= 55,
-                            ],
-                            [100.0, 75.0, 65.0],
-                            default=55.0,
-                        )
-                        summary["공정점수"] = np.minimum(summary["공정점수_raw"], cap).clip(0, 100)
-                        summary["상태"] = np.select(
-                            [summary["공정점수"] >= 70, summary["공정점수"] >= 65, summary["공정점수"] >= 60],
-                            ["양호", "주의", "경고"],
-                            default="위험",
-                        )
-                        summary["공장그룹"] = pd.Categorical(summary["공장그룹"], categories=factory_order + ["기타"], ordered=True)
-                        summary["공정"] = pd.Categorical(summary["공정"], categories=target_order, ordered=True)
-                        summary = summary.sort_values(["날짜_date", "공장그룹", "공장", "공정"], ascending=[True, True, True, True])
-                        summary_show_cols = [
-                            c
-                            for c in [
-                                "날짜_date",
-                                "공장",
-                                "공정",
-                                "실적수량",
-                                "규격대응률(%)",
-                                "정확대응비중(%)",
-                                "초과생산비중(%)",
-                                "비정형생산비중(%)",
-                                "공정점수",
-                                "상태",
-                            ]
-                            if c in summary.columns
-                        ]
-                        _summary_view = summary[summary_show_cols].copy() if summary_show_cols else summary.copy()
                         _summary_fmt: dict[str, str] = {}
                         for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량", "부족수량", "필요수량"]:
-                            if c in _summary_view.columns:
+                            if c in summary_view.columns:
                                 _summary_fmt[c] = "{:,.0f}"
-                        for c in _summary_view.columns:
+                        for c in summary_view.columns:
                             if isinstance(c, str) and c.endswith("(%)"):
                                 _summary_fmt[c] = "{:.1f}%"
-                        if "공정점수" in _summary_view.columns:
-                            _summary_fmt["공정점수"] = "{:.1f}점"
-                        st.dataframe(_summary_view.style.format(_summary_fmt), use_container_width=True, height=420)
+                        if "공정점수" in summary_view.columns:
+                            _summary_fmt["공정점수"] = "{:.1f}"
+                        st.dataframe(summary_view.style.format(_summary_fmt), use_container_width=True, height=420)
 
                     with st.expander("상세 테이블", expanded=False):
-                        det_show = det.copy()
-                        group_cols = [c for c in ["날짜_date", "공장그룹", "공장", "공정", "신규분류요약"] if c in det_show.columns]
                         value_cols = [c for c in ["실적수량", "필요수량", "부족수량", "유효생산량", "과생산량", "불필요생산량"] if c in det_show.columns]
-                        if group_cols and value_cols:
-                            det_show = det_show.groupby(group_cols, dropna=False)[value_cols].sum().reset_index()
-                        show_cols = [c for c in ["날짜_date", "공장", "공정", "신규분류요약"] if c in det_show.columns] + value_cols
-                        det_show = det_show[show_cols].copy() if show_cols else det_show
-                        if "공정" in det_show.columns:
-                            det_show["공정"] = pd.Categorical(det_show["공정"], categories=target_order, ordered=True)
-                        if "공장그룹" in det_show.columns:
-                            det_show["공장그룹"] = pd.Categorical(det_show["공장그룹"], categories=factory_order + ["기타"], ordered=True)
-                        sort_cols = [c for c in ["날짜_date", "공장그룹", "공장", "공정", "신규분류요약"] if c in det_show.columns]
-                        det_show = det_show.sort_values(sort_cols, ascending=[True] * len(sort_cols)) if sort_cols else det_show
-                        _det_fmt: dict[str, str] = {}
-                        for c in value_cols:
-                            if c in det_show.columns:
-                                _det_fmt[c] = "{:,.0f}"
-
-                        export_summary = _summary_view.copy()
-                        export_detail = det_show.copy()
-                        st.download_button(
-                            "공장별요약+상세테이블 다운로드 (xlsx)",
-                            data=lambda: build_two_sheet_excel(export_summary, export_detail, sheet1="공장별요약", sheet2="상세테이블"),
-                            file_name=f"공정밸런스_요약+상세_{start_date}_{end_date}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        )
+                        _det_fmt: dict[str, str] = {c: "{:,.0f}" for c in value_cols}
                         if len(det_show) <= 3000:
                             st.dataframe(det_show.style.format(_det_fmt), use_container_width=True, height=520)
                         else:
