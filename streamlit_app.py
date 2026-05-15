@@ -1450,6 +1450,113 @@ def load_process_balance_detail_excels(
     return out.reset_index(drop=True), has_any_sheet
 
 
+@st.cache_data(show_spinner=False)
+def load_process_balance_prepared(
+    result_paths: tuple[str, ...],
+    mtime_nss: tuple[int, ...],
+) -> tuple[pd.DataFrame, pd.DataFrame, bool]:
+    """공정 밸런스 계산용으로 '매칭결과'를 미리 집계해 둔 데이터 반환(빠른 기간 필터/리런 목적).
+
+    반환:
+    - proc_base: 일자/공장/공정 단위 집계(수량 + SKU 카운트)
+    - det_base:  일자/공장/공정/신규분류요약 단위 집계(상세 테이블용)
+    - has_any_sheet
+    """
+    _ = mtime_nss  # cache key only
+
+    det, has_any_sheet = load_process_balance_detail_excels(result_paths, mtime_nss)
+    if det is None or len(det) == 0:
+        return pd.DataFrame(), pd.DataFrame(), has_any_sheet
+
+    det = det.copy()
+
+    # Backward-compat for older 결과2 파일
+    if "공정" in det.columns:
+        det["공정"] = det["공정"].replace({"최종공정": "누수규격"})
+
+    target_order = ["사출", "분리", "하드레이션", "접착", "누수규격"]
+    if "공정" in det.columns:
+        det = det[det["공정"].isin(target_order)].copy()
+
+    # 공장 그룹(A/C/S관) 매핑
+    if "공장" in det.columns:
+        det["공장그룹"] = np.select(
+            [
+                det["공장"].astype(str).str.contains("A관", na=False),
+                det["공장"].astype(str).str.contains("C관", na=False),
+                det["공장"].astype(str).str.contains("S관", na=False),
+            ],
+            ["A관", "C관", "S관"],
+            default="기타",
+        )
+    else:
+        det["공장그룹"] = "기타"
+
+    # 제품명: 제품코드 앞자리 5글자(예: Q1230)
+    if "제품코드" in det.columns:
+        det["제품명"] = det["제품코드"].astype(str).str.slice(0, 5)
+
+    # 정확/초과/비정형 재계산(집계 전에 수행)
+    if {"실적수량", "필요수량"}.issubset(set(det.columns)):
+        _prod = pd.to_numeric(det["실적수량"], errors="coerce").fillna(0).clip(lower=0)
+        _need = pd.to_numeric(det["필요수량"], errors="coerce").fillna(0).clip(lower=0)
+        det["유효생산량"] = np.minimum(_prod, _need)
+        det["불필요생산량"] = np.where(_need <= 0, _prod, 0.0)
+        det["과생산량"] = np.where(_need > 0, np.maximum(_prod - _need, 0.0), 0.0)
+
+    group_keys = [c for c in ["날짜_date", "공장", "공장그룹", "공정"] if c in det.columns]
+    if not group_keys:
+        return pd.DataFrame(), pd.DataFrame(), has_any_sheet
+
+    # 수량 집계(일자/공장/공정)
+    agg_cols = [c for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량", "부족수량", "필요수량"] if c in det.columns]
+    qty = det.groupby(group_keys, dropna=False)[agg_cols].sum().reset_index() if agg_cols else det[group_keys].drop_duplicates()
+    for c in agg_cols:
+        qty[c] = pd.to_numeric(qty[c], errors="coerce").fillna(0)
+
+    # SKU 집계(제품명 기준) - 한번만(비용 큰 연산)
+    if "제품명" in det.columns:
+        produced = (
+            det[pd.to_numeric(det.get("실적수량", 0), errors="coerce").fillna(0) > 0]
+            .groupby(group_keys, dropna=False)["제품명"]
+            .nunique()
+            .rename("생산SKU수")
+        )
+        needed = (
+            det[pd.to_numeric(det.get("필요수량", 0), errors="coerce").fillna(0) > 0]
+            .groupby(group_keys, dropna=False)["제품명"]
+            .nunique()
+            .rename("필요SKU수")
+        )
+        inter = (
+            det[
+                (pd.to_numeric(det.get("실적수량", 0), errors="coerce").fillna(0) > 0)
+                & (pd.to_numeric(det.get("필요수량", 0), errors="coerce").fillna(0) > 0)
+            ]
+            .groupby(group_keys, dropna=False)["제품명"]
+            .nunique()
+            .rename("규격대응SKU수")
+        )
+        sku = pd.concat([produced, needed, inter], axis=1).fillna(0).reset_index()
+    else:
+        sku = pd.DataFrame(columns=group_keys + ["생산SKU수", "필요SKU수", "규격대응SKU수"])
+
+    proc_base = qty.merge(sku, on=group_keys, how="left")
+    for c in ["생산SKU수", "필요SKU수", "규격대응SKU수"]:
+        if c in proc_base.columns:
+            proc_base[c] = pd.to_numeric(proc_base[c], errors="coerce").fillna(0)
+
+    # 상세 테이블용 집계(일자/공장/공정/신규분류요약)
+    det_group_cols = [c for c in ["날짜_date", "공장", "공장그룹", "공정", "신규분류요약"] if c in det.columns]
+    det_value_cols = [c for c in ["실적수량", "필요수량", "부족수량", "유효생산량", "과생산량", "불필요생산량"] if c in det.columns]
+    if det_group_cols and det_value_cols:
+        det_base = det.groupby(det_group_cols, dropna=False)[det_value_cols].sum().reset_index()
+    else:
+        det_base = pd.DataFrame()
+
+    return proc_base.reset_index(drop=True), det_base.reset_index(drop=True), has_any_sheet
+
+
 def _truncate_err_message(msg: str, *, max_chars: int = 600) -> str:
     msg = str(msg or "")
     msg = " ".join(msg.split())
@@ -1536,11 +1643,14 @@ try:
     process_has_sheet = False
     process_detail = pd.DataFrame()
     process_detail_has_sheet = False
+    process_proc_base = pd.DataFrame()
+    process_det_base = pd.DataFrame()
     if result2_candidates:
         result2_paths = tuple(str(p) for p in result2_candidates)
         mtime2_nss = tuple(int(p.stat().st_mtime_ns) for p in result2_candidates)
         process_daily, process_has_sheet = load_process_balance_excels(result2_paths, mtime2_nss)
         process_detail, process_detail_has_sheet = load_process_balance_detail_excels(result2_paths, mtime2_nss)
+        process_proc_base, process_det_base, _ = load_process_balance_prepared(result2_paths, mtime2_nss)
 
     # 금일 데이터 제외 (아직 생산 중이므로) - KST 기준
     now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
@@ -2577,55 +2687,22 @@ try:
         st.markdown("### ⚖️ 공정 밸런스")
         if not result2_candidates:
             st.info("`유효생산량_결과2*.xlsx` 파일을 찾을 수 없습니다. 결과2를 생성한 뒤, repo 루트 또는 `outputs/`에 넣어주세요.")
-        elif (process_detail is None) or (len(process_detail) == 0) or (not process_detail_has_sheet):
+        elif (process_proc_base is None) or (len(process_proc_base) == 0) or (not process_detail_has_sheet):
             st.info("`매칭결과` 시트가 없거나 데이터가 없습니다. (공정 밸런스 점수 계산 불가)")
         else:
-            det = process_detail.copy()
-            # 기간 필터 동일 적용 + 금일 제외
-            if "날짜_date" in det.columns:
-                det = det[(det["날짜_date"] >= start_date) & (det["날짜_date"] <= end_date) & (det["날짜_date"] != today)].copy()
-            if len(det) == 0:
+            # 미리 집계된 proc_base/det_base를 기간 필터만 적용(리런 속도↑)
+            proc_base = process_proc_base
+            det_base = process_det_base
+            proc = proc_base[(proc_base["날짜_date"] >= start_date) & (proc_base["날짜_date"] <= end_date) & (proc_base["날짜_date"] != today)].copy()
+            det = det_base[(det_base["날짜_date"] >= start_date) & (det_base["날짜_date"] <= end_date) & (det_base["날짜_date"] != today)].copy() if len(det_base) else pd.DataFrame()
+
+            if len(proc) == 0:
                 st.info("선택한 기간에 공정별 데이터가 없습니다.")
             else:
-                # Backward-compat for older 결과2 파일
-                if "공정" in det.columns:
-                    det["공정"] = det["공정"].replace({"최종공정": "누수규격"})
-
                 target_order = ["사출", "분리", "하드레이션", "접착", "누수규격"]
-                if "공정" in det.columns:
-                    det = det[det["공정"].isin(target_order)].copy()
-
-                # 공장 그룹(A/C/S관) 매핑 + 순서 고정
-                if "공장" in det.columns:
-                    det["공장그룹"] = np.select(
-                        [
-                            det["공장"].astype(str).str.contains("A관", na=False),
-                            det["공장"].astype(str).str.contains("C관", na=False),
-                            det["공장"].astype(str).str.contains("S관", na=False),
-                        ],
-                        ["A관", "C관", "S관"],
-                        default="기타",
-                    )
-                else:
-                    det["공장그룹"] = "기타"
                 factory_order = ["A관", "C관", "S관"]
-                det["공장그룹"] = pd.Categorical(det["공장그룹"], categories=factory_order + ["기타"], ordered=True)
 
-                # 제품명: 제품코드 앞자리 5글자(예: Q1230)
-                if "제품코드" in det.columns:
-                    det["제품명"] = det["제품코드"].astype(str).str.slice(0, 5)
-
-                # 생산운영현황 탭과 동일한 3분할(정확/초과/비정형)로 맞추기:
-                # - 정확(유효) = min(생산, 필요)
-                # - 초과 = need>0 구간의 max(생산-필요, 0)
-                # - 비정형 = need==0 구간의 생산 전량
-                # 결과2에 이미 컬럼이 있어도(과생산량/불필요생산량) 중복 집계가 발생할 수 있어 재계산값으로 덮어씀
-                if {"실적수량", "필요수량"}.issubset(set(det.columns)):
-                    _prod = pd.to_numeric(det["실적수량"], errors="coerce").fillna(0).clip(lower=0)
-                    _need = pd.to_numeric(det["필요수량"], errors="coerce").fillna(0).clip(lower=0)
-                    det["유효생산량"] = np.minimum(_prod, _need)
-                    det["불필요생산량"] = np.where(_need <= 0, _prod, 0.0)
-                    det["과생산량"] = np.where(_need > 0, np.maximum(_prod - _need, 0.0), 0.0)
+                proc["공장그룹"] = pd.Categorical(proc["공장그룹"], categories=factory_order + ["기타"], ordered=True)
 
                 # ---- 공정 점수 산출(부족수량 기반 필요수량 사용 X) ----
                 # 1) 규격 대응 SKU 점수화: (필요 SKU ∩ 생산 SKU) / 생산 SKU
@@ -2633,49 +2710,7 @@ try:
                 # 3) 초과생산 비중: 과생산량 / 실적수량
                 # 4) 비정형 생산 비중: 불필요생산량 / 실적수량
                 # 점수 합성(가중): SKU 25%, 정확 45%, 초과감점 20%, 비정형감점 10%
-                group_keys = [c for c in ["날짜_date", "공장", "공장그룹", "공정"] if c in det.columns]
-                if not group_keys:
-                    st.info("공정 밸런스 계산에 필요한 컬럼(날짜/공장/공정)이 부족합니다.")
-                    st.stop()
-
-                # 수량 집계
-                agg_cols = [c for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량", "부족수량", "필요수량"] if c in det.columns]
-                qty = det.groupby(group_keys, dropna=False)[agg_cols].sum().reset_index() if agg_cols else det[group_keys].drop_duplicates()
-                for c in ["실적수량", "유효생산량", "과생산량", "불필요생산량", "부족수량", "필요수량"]:
-                    if c in qty.columns:
-                        qty[c] = pd.to_numeric(qty[c], errors="coerce").fillna(0)
-
-                # SKU 집계(제품명 기준)
-                if "제품명" in det.columns:
-                    produced = (
-                        det[pd.to_numeric(det.get("실적수량", 0), errors="coerce").fillna(0) > 0]
-                        .groupby(group_keys, dropna=False)["제품명"]
-                        .nunique()
-                        .rename("생산SKU수")
-                    )
-                    needed = (
-                        det[pd.to_numeric(det.get("필요수량", 0), errors="coerce").fillna(0) > 0]
-                        .groupby(group_keys, dropna=False)["제품명"]
-                        .nunique()
-                        .rename("필요SKU수")
-                    )
-                    inter = (
-                        det[
-                            (pd.to_numeric(det.get("실적수량", 0), errors="coerce").fillna(0) > 0)
-                            & (pd.to_numeric(det.get("필요수량", 0), errors="coerce").fillna(0) > 0)
-                        ]
-                        .groupby(group_keys, dropna=False)["제품명"]
-                        .nunique()
-                        .rename("규격대응SKU수")
-                    )
-                    sku = pd.concat([produced, needed, inter], axis=1).fillna(0).reset_index()
-                else:
-                    sku = pd.DataFrame(columns=group_keys + ["생산SKU수", "필요SKU수", "규격대응SKU수"])
-
-                proc = qty.merge(sku, on=group_keys, how="left")
-                for c in ["생산SKU수", "필요SKU수", "규격대응SKU수"]:
-                    if c in proc.columns:
-                        proc[c] = pd.to_numeric(proc[c], errors="coerce").fillna(0)
+                # proc는 이미 일자/공장/공정 단위로 수량 및 SKU 카운트까지 집계됨
 
                 proc["규격대응률(%)"] = np.where(
                     proc.get("생산SKU수", 0) > 0,
