@@ -2841,22 +2841,6 @@ try:
                             hovertemplate="공장=%{x}<br>종합점수=%{y:.1f}<extra></extra>",
                             cliponaxis=False,
                         )
-                        # grade label (small) under the big number (use yshift to avoid overlap)
-                        try:
-                            for _, r in by_factory.iterrows():
-                                fig_factory.add_annotation(
-                                    x=str(r["공장"]),
-                                    y=float(r["종합점수"]),
-                                    text=str(r["등급"]),
-                                    showarrow=False,
-                                    xanchor="center",
-                                    yanchor="bottom",
-                                    # 등급(작게) → 숫자 → 막대 순으로 보이도록 숫자보다 위쪽에 배치
-                                    yshift=56,
-                                    font=dict(size=14, family="Arial", color=grade_text_color(str(r["등급"]))),
-                                )
-                        except Exception:
-                            pass
 
                         fig_factory.update_layout(
                             height=chart_height,
@@ -2869,7 +2853,7 @@ try:
                                 title_font=dict(size=18, family="Arial", color="#111827"),
                             ),
                             yaxis=dict(
-                                range=[0, 125],
+                                range=[0, 110],
                                 tickfont=dict(size=14, family="Arial", color="#111827"),
                                 title_font=dict(size=18, family="Arial", color="#111827"),
                                 automargin=True,
@@ -2921,32 +2905,7 @@ try:
                             cliponaxis=False,
                             hovertemplate="공정=%{x}<br>점수=%{y:.1f}<br>등급=%{customdata[0]}<extra></extra>",
                         )
-                        # grade labels under numbers (small): add as annotations per bar to avoid overlap
-                        try:
-                            for _, r in by_fac_proc.iterrows():
-                                row_key = str(r.get("공장그룹"))
-                                # facet row annotations use yref='paper' domains; easier: use x/y in data coordinates with correct subplot.
-                                # Use Plotly's facet naming convention: row order follows factory_order.
-                                row_idx = factory_order.index(row_key) + 1 if row_key in factory_order else 1
-                                # subplot yaxis name: y, y2, y3... for rows in facet_row (top to bottom)
-                                xaxis_name = "x" if row_idx == 1 else f"x{row_idx}"
-                                yaxis_name = "y" if row_idx == 1 else f"y{row_idx}"
-                                fig_fac.add_annotation(
-                                    x=str(r["공정"]),
-                                    y=float(r["평균점수"]),
-                                    text=str(r["등급"]),
-                                    showarrow=False,
-                                    font=dict(size=12, family="Arial", color=grade_text_color(str(r["등급"]))),
-                                    xanchor="center",
-                                    yanchor="bottom",
-                                    # 등급(작게) → 숫자 → 막대 순으로 보이도록 숫자보다 위쪽에 배치
-                                    yshift=40,
-                                    xref=xaxis_name,
-                                    yref=yaxis_name,
-                                )
-                        except Exception:
-                            pass
-                        fig_fac.update_yaxes(range=[0, 115])
+                        fig_fac.update_yaxes(range=[0, 110])
                         fig_fac.update_layout(
                             height=chart_height,
                             margin=dict(l=230, r=10, t=30, b=10),
