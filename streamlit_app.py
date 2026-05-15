@@ -33,6 +33,58 @@ BALANCE_COLORS = {
     "초과+비정형": "#F43F5E",
 }
 
+# ====== Score grading (공정/공장 공통) ======
+# 공정 등급 기준(점수 0~100)
+# - 양호: 70 이상
+# - 주의: 65 이상
+# - 경고: 60 이상
+# - 위험: 60 미만
+GRADE_RANK = {"양호": 3, "주의": 2, "경고": 1, "위험": 0}
+INV_GRADE_RANK = {v: k for k, v in GRADE_RANK.items()}
+
+
+def grade_of(score: float) -> str:
+    try:
+        s = float(score)
+    except Exception:
+        return "위험"
+    if np.isnan(s):
+        return "위험"
+    if s >= 70:
+        return "양호"
+    if s >= 65:
+        return "주의"
+    if s >= 60:
+        return "경고"
+    return "위험"
+
+
+def grade_text_color(grade: str) -> str:
+    # 직관: 양호/주의=차분(블루/블랙), 경고/위험=레드
+    if grade == "주의":
+        return "#1D4ED8"
+    if grade in {"경고", "위험"}:
+        return "#B91C1C"
+    return "#111827"
+
+
+def majority_grade(grades: list[str]) -> str:
+    # 공정 5개 등급의 다수결(3개 이상) / 2-2-1이면 낮은 등급 선택
+    counts: dict[str, int] = {}
+    for g in grades:
+        counts[g] = counts.get(g, 0) + 1
+    majority = next((g for g, n in counts.items() if n >= 3), None)
+    if majority is not None:
+        picked = majority
+    else:
+        max_n = max(counts.values()) if counts else 0
+        top_grades = [g for g, n in counts.items() if n == max_n]
+        picked = INV_GRADE_RANK[min(GRADE_RANK.get(g, 0) for g in top_grades)] if top_grades else "위험"
+    # 안전장치: '위험' 공정이 1개라도 있으면 종합은 최대 '경고'
+    if "위험" in grades and picked in {"양호", "주의"}:
+        picked = "경고"
+    return picked
+
 
 def _factory_color_discrete_map(factories: list[str]) -> dict[str, str]:
     out: dict[str, str] = {}
@@ -2670,35 +2722,9 @@ try:
 
                 proc_score_map = {str(r["공정"]): float(r["평균점수"]) for _, r in by_proc.iterrows()} if len(by_proc) else {}
 
-                def _grade(score: float) -> str:
-                    if score >= 70:
-                        return "양호"
-                    if score >= 65:
-                        return "주의"
-                    if score >= 60:
-                        return "경고"
-                    return "위험"
-
-                # 종합 등급: 공정 5개 등급의 다수결(3개 이상) / 2-2-1이면 낮은 등급 선택
-                # 안전장치: '위험' 공정이 1개라도 있으면 종합은 최대 '경고'
-                grade_rank = {"양호": 3, "주의": 2, "경고": 1, "위험": 0}
-                inv_grade_rank = {v: k for k, v in grade_rank.items()}
-                proc_grades = [_grade(float(proc_score_map.get(p, 0.0))) for p in target_order]
-                counts: dict[str, int] = {}
-                for g in proc_grades:
-                    counts[g] = counts.get(g, 0) + 1
-                majority = next((g for g, n in counts.items() if n >= 3), None)
-                if majority is not None:
-                    overall_status = majority
-                else:
-                    max_n = max(counts.values()) if counts else 0
-                    top_grades = [g for g, n in counts.items() if n == max_n]
-                    overall_status = inv_grade_rank[min(grade_rank.get(g, 0) for g in top_grades)] if top_grades else "위험"
-                if "위험" in proc_grades and overall_status in {"양호", "주의"}:
-                    overall_status = "경고"
-                # 등급 컬러(직관): 양호/주의=차분(블루/블랙), 경고/위험=레드
-                status_color = {"양호": "#111827", "주의": "#1d4ed8", "경고": "#b91c1c", "위험": "#b91c1c"}
-                overall_status_html = f"<span style='color:{status_color.get(overall_status, '#111827')}'>{overall_status}</span>"
+                proc_grades = [grade_of(float(proc_score_map.get(p, 0.0))) for p in target_order]
+                overall_status = majority_grade(proc_grades)
+                overall_status_html = f"<span style='color:{grade_text_color(overall_status)}'>{overall_status}</span>"
 
                 k_cols = st.columns([1.25, 1, 1, 1, 1, 1])
                 with k_cols[0]:
@@ -2709,19 +2735,19 @@ try:
                     )
                 with k_cols[1]:
                     v = float(proc_score_map.get("사출", 0.0))
-                    render_kpi_card("사출 점수", f"{v:.1f}점", sub=f"등급: {_grade(v)}")
+                    render_kpi_card("사출 점수", f"{v:.1f}점", sub=f"등급: {grade_of(v)}")
                 with k_cols[2]:
                     v = float(proc_score_map.get("분리", 0.0))
-                    render_kpi_card("분리 점수", f"{v:.1f}점", sub=f"등급: {_grade(v)}")
+                    render_kpi_card("분리 점수", f"{v:.1f}점", sub=f"등급: {grade_of(v)}")
                 with k_cols[3]:
                     v = float(proc_score_map.get("하드레이션", 0.0))
-                    render_kpi_card("하드레이션 점수", f"{v:.1f}점", sub=f"등급: {_grade(v)}")
+                    render_kpi_card("하드레이션 점수", f"{v:.1f}점", sub=f"등급: {grade_of(v)}")
                 with k_cols[4]:
                     v = float(proc_score_map.get("접착", 0.0))
-                    render_kpi_card("접착 점수", f"{v:.1f}점", sub=f"등급: {_grade(v)}")
+                    render_kpi_card("접착 점수", f"{v:.1f}점", sub=f"등급: {grade_of(v)}")
                 with k_cols[5]:
                     v = float(proc_score_map.get("누수규격", 0.0))
-                    render_kpi_card("누수규격 점수", f"{v:.1f}점", sub=f"등급: {_grade(v)}")
+                    render_kpi_card("누수규격 점수", f"{v:.1f}점", sub=f"등급: {grade_of(v)}")
 
                 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
@@ -2761,23 +2787,6 @@ try:
                     if len(proc_acs) == 0:
                         st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
                     else:
-                        def _majority_grade(grades: list[str]) -> str:
-                            grade_rank = {"양호": 3, "주의": 2, "경고": 1, "위험": 0}
-                            inv_grade_rank = {v: k for k, v in grade_rank.items()}
-                            counts: dict[str, int] = {}
-                            for g in grades:
-                                counts[g] = counts.get(g, 0) + 1
-                            majority = next((g for g, n in counts.items() if n >= 3), None)
-                            if majority is not None:
-                                picked = majority
-                            else:
-                                max_n = max(counts.values()) if counts else 0
-                                top_grades = [g for g, n in counts.items() if n == max_n]
-                                picked = inv_grade_rank[min(grade_rank.get(g, 0) for g in top_grades)] if top_grades else "위험"
-                            if "위험" in grades and picked in {"양호", "주의"}:
-                                picked = "경고"
-                            return picked
-
                         by_factory = (
                             proc_acs.groupby("공장그룹", dropna=False)
                             .apply(
@@ -2805,8 +2814,8 @@ try:
                         fac_grade_map: dict[str, str] = {}
                         for fg in factory_order:
                             subp = by_fac_proc_scores[by_fac_proc_scores["공장그룹"].astype(str) == str(fg)]
-                            grades = [_grade(float(subp[subp["공정"].astype(str) == p]["평균점수"].mean())) for p in target_order]
-                            fac_grade_map[str(fg)] = _majority_grade(grades)
+                            grades = [grade_of(float(subp[subp["공정"].astype(str) == p]["평균점수"].mean())) for p in target_order]
+                            fac_grade_map[str(fg)] = majority_grade(grades)
                         by_factory["등급"] = by_factory["공장그룹"].astype(str).map(fac_grade_map).fillna("위험")
                         by_factory["표시"] = by_factory["종합점수"].apply(lambda v: f"{float(v):.1f}")
 
@@ -2838,12 +2847,13 @@ try:
                                 fig_factory.add_annotation(
                                     x=str(r["공장"]),
                                     y=float(r["종합점수"]),
-                                    text=f"({r['등급']})",
+                                    text=str(r["등급"]),
                                     showarrow=False,
                                     xanchor="center",
-                                    yanchor="top",
-                                    yshift=-20,
-                                    font=dict(size=14, family="Arial", color=status_color.get(str(r["등급"]), "#111827")),
+                                    yanchor="bottom",
+                                    # 등급(작게) → 숫자 → 막대 순으로 보이도록 숫자보다 위쪽에 배치
+                                    yshift=56,
+                                    font=dict(size=14, family="Arial", color=grade_text_color(str(r["등급"]))),
                                 )
                         except Exception:
                             pass
@@ -2859,7 +2869,7 @@ try:
                                 title_font=dict(size=18, family="Arial", color="#111827"),
                             ),
                             yaxis=dict(
-                                range=[0, 110],
+                                range=[0, 125],
                                 tickfont=dict(size=14, family="Arial", color="#111827"),
                                 title_font=dict(size=18, family="Arial", color="#111827"),
                                 automargin=True,
@@ -2887,7 +2897,7 @@ try:
                         by_fac_proc["평균점수"] = pd.to_numeric(by_fac_proc["평균점수"], errors="coerce").fillna(0)
                         by_fac_proc["공정"] = pd.Categorical(by_fac_proc["공정"], categories=target_order, ordered=True)
                         by_fac_proc = by_fac_proc.sort_values(["공장그룹", "공정"])
-                        by_fac_proc["등급"] = by_fac_proc["평균점수"].apply(lambda v: _grade(float(v)))
+                        by_fac_proc["등급"] = by_fac_proc["평균점수"].apply(lambda v: grade_of(float(v)))
                         by_fac_proc["표시"] = by_fac_proc["평균점수"].apply(lambda v: f"{float(v):.1f}")
 
                         fig_fac = px.bar(
@@ -2924,17 +2934,19 @@ try:
                                 fig_fac.add_annotation(
                                     x=str(r["공정"]),
                                     y=float(r["평균점수"]),
-                                    text=f"({r['등급']})",
+                                    text=str(r["등급"]),
                                     showarrow=False,
-                                    font=dict(size=12, family="Arial", color=status_color.get(str(r['등급']), "#111827")),
+                                    font=dict(size=12, family="Arial", color=grade_text_color(str(r["등급"]))),
                                     xanchor="center",
-                                    yanchor="top",
-                                    yshift=-16,
+                                    yanchor="bottom",
+                                    # 등급(작게) → 숫자 → 막대 순으로 보이도록 숫자보다 위쪽에 배치
+                                    yshift=40,
                                     xref=xaxis_name,
                                     yref=yaxis_name,
                                 )
                         except Exception:
                             pass
+                        fig_fac.update_yaxes(range=[0, 115])
                         fig_fac.update_layout(
                             height=chart_height,
                             margin=dict(l=230, r=10, t=30, b=10),
