@@ -2949,6 +2949,92 @@ try:
                                 unsafe_allow_html=True,
                             )
 
+                # 공장별 종합점수 추이(선그래프): 기본 접힘(토글)로 제공
+                with st.expander("공장별 종합점수 추이", expanded=False):
+                    req_cols_ts = {"날짜_date", "공장그룹", "공정점수", "실적수량"}
+                    if len(proc_acs) == 0 or not req_cols_ts.issubset(set(proc_acs.columns)):
+                        st.info("추이 그래프를 그리기 위한 데이터가 부족합니다.")
+                    else:
+                        display_start_date = start_date
+                        display_end_date = end_date
+                        if filter_option == "당월":
+                            # 당월은 1일~말일까지 축을 만들어 추이를 한 번에 보기 좋게 표시
+                            display_end_date = _month_end(display_start_date)
+
+                        if filter_option in {"당월", "전월"}:
+                            bucket = "D"
+                        else:
+                            span_days = (display_end_date - display_start_date).days + 1
+                            if span_days <= 30:
+                                bucket = "D"
+                            elif span_days <= 210:
+                                bucket = "W"
+                            else:
+                                bucket = "M"
+
+                        axis = _build_axis(display_start_date, display_end_date, bucket)
+                        tickvals, ticktext = _build_tick_labels(axis, bucket)
+
+                        ts_base = proc_acs[["날짜_date", "공장그룹", "공정점수", "실적수량"]].copy()
+                        ts_base["date"] = pd.to_datetime(ts_base["날짜_date"], errors="coerce")
+                        ts_base = ts_base.dropna(subset=["date"])
+                        ts_base["period"] = _period_start(ts_base["date"], bucket)
+                        ts_base["w"] = pd.to_numeric(ts_base["실적수량"], errors="coerce").fillna(0).clip(lower=0)
+                        ts_base["s"] = pd.to_numeric(ts_base["공정점수"], errors="coerce").fillna(0).clip(0, 100)
+
+                        agg_ts = (
+                            ts_base.groupby(["period", "공장그룹"], dropna=False)
+                            .apply(lambda g: float((g["s"] * g["w"]).sum() / max(float(g["w"].sum()), 1.0)))
+                            .rename("종합점수")
+                            .reset_index()
+                        )
+                        agg_ts["period"] = pd.to_datetime(agg_ts["period"], errors="coerce")
+
+                        factories = [f for f in factory_order if f in proc_acs["공장그룹"].astype(str).unique().tolist()]
+                        if not factories:
+                            factories = factory_order
+
+                        full_grid = pd.MultiIndex.from_product([axis, factories], names=["period", "공장그룹"]).to_frame(index=False)
+                        ts_df = full_grid.merge(agg_ts, on=["period", "공장그룹"], how="left")
+                        ts_df["공장"] = ts_df["공장그룹"].astype(str).map(factory_display).fillna(ts_df["공장그룹"].astype(str))
+
+                        label_map = {pd.Timestamp(v): t for v, t in zip(tickvals, ticktext, strict=False)}
+                        ts_df["x_label"] = ts_df["period"].map(label_map)
+
+                        line_fig = px.line(
+                            ts_df,
+                            x="period",
+                            y="종합점수",
+                            color="공장",
+                            markers=False,
+                            custom_data=["x_label"],
+                            color_discrete_map={
+                                factory_display["A관"]: FACTORY_COLOR_MAP["A관"],
+                                factory_display["C관"]: FACTORY_COLOR_MAP["C관"],
+                                factory_display["S관"]: FACTORY_COLOR_MAP["S관"],
+                            },
+                        )
+                        line_fig.update_traces(
+                            line=dict(width=3.5),
+                            hovertemplate="공장=%{legendgroup}<br>기간=%{customdata[0]}<br>종합점수=%{y:.1f}점<extra></extra>",
+                        )
+                        line_fig.update_layout(
+                            height=330,
+                            margin=dict(l=0, r=0, t=10, b=0),
+                            yaxis=dict(range=[0, 105], title="종합점수", tickformat=".1f"),
+                            xaxis=dict(
+                                tickmode="array",
+                                tickvals=tickvals,
+                                ticktext=ticktext,
+                                tickangle=-45,
+                                tickfont=dict(size=10),
+                                title=None,
+                            ),
+                            legend_title_text="공장",
+                            showlegend=True,
+                        )
+                        st.plotly_chart(line_fig, use_container_width=True)
+
                 st.markdown("<div style='height:26px'></div>", unsafe_allow_html=True)
                 st.markdown("#### 관별 감점요인 · 공정별 생산 비율")
                 if len(proc_acs) == 0:
