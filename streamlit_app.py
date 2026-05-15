@@ -2668,29 +2668,6 @@ try:
                 worst_proc = by_proc.sort_values("평균점수").iloc[0]["공정"] if len(by_proc) else "-"
                 risk_count = int((by_proc["평균점수"] < 70).sum()) if len(by_proc) else 0
 
-                # 종합 등급: 공정 5개 등급의 다수결(3개 이상) / 2-2-1이면 낮은 등급 선택
-                # 안전장치: '위험' 공정이 1개라도 있으면 종합은 최대 '경고'
-                grade_rank = {"양호": 3, "주의": 2, "경고": 1, "위험": 0}
-                inv_grade_rank = {v: k for k, v in grade_rank.items()}
-                proc_grades = [_grade(float(proc_score_map.get(p, 0.0))) for p in target_order]
-                counts: dict[str, int] = {}
-                for g in proc_grades:
-                    counts[g] = counts.get(g, 0) + 1
-                # Majority (>=3)
-                majority = next((g for g, n in counts.items() if n >= 3), None)
-                if majority is not None:
-                    overall_status = majority
-                else:
-                    max_n = max(counts.values()) if counts else 0
-                    top_grades = [g for g, n in counts.items() if n == max_n]
-                    # Choose the lower (worse) grade among tied top grades
-                    overall_status = inv_grade_rank[min(grade_rank.get(g, 0) for g in top_grades)] if top_grades else "위험"
-
-                if "위험" in proc_grades and overall_status in {"양호", "주의"}:
-                    overall_status = "경고"
-                status_color = {"양호": "#047857", "주의": "#1d4ed8", "경고": "#b45309", "위험": "#b91c1c"}
-                overall_status_html = f"<span style='color:{status_color.get(overall_status, '#111827')}'>{overall_status}</span>"
-
                 proc_score_map = {str(r["공정"]): float(r["평균점수"]) for _, r in by_proc.iterrows()} if len(by_proc) else {}
 
                 def _grade(score: float) -> str:
@@ -2701,6 +2678,26 @@ try:
                     if score >= 60:
                         return "경고"
                     return "위험"
+
+                # 종합 등급: 공정 5개 등급의 다수결(3개 이상) / 2-2-1이면 낮은 등급 선택
+                # 안전장치: '위험' 공정이 1개라도 있으면 종합은 최대 '경고'
+                grade_rank = {"양호": 3, "주의": 2, "경고": 1, "위험": 0}
+                inv_grade_rank = {v: k for k, v in grade_rank.items()}
+                proc_grades = [_grade(float(proc_score_map.get(p, 0.0))) for p in target_order]
+                counts: dict[str, int] = {}
+                for g in proc_grades:
+                    counts[g] = counts.get(g, 0) + 1
+                majority = next((g for g, n in counts.items() if n >= 3), None)
+                if majority is not None:
+                    overall_status = majority
+                else:
+                    max_n = max(counts.values()) if counts else 0
+                    top_grades = [g for g, n in counts.items() if n == max_n]
+                    overall_status = inv_grade_rank[min(grade_rank.get(g, 0) for g in top_grades)] if top_grades else "위험"
+                if "위험" in proc_grades and overall_status in {"양호", "주의"}:
+                    overall_status = "경고"
+                status_color = {"양호": "#047857", "주의": "#1d4ed8", "경고": "#b45309", "위험": "#b91c1c"}
+                overall_status_html = f"<span style='color:{status_color.get(overall_status, '#111827')}'>{overall_status}</span>"
 
                 k_cols = st.columns([1.25, 1, 1, 1, 1, 1])
                 with k_cols[0]:
