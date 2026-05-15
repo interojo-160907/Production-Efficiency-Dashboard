@@ -2696,7 +2696,8 @@ try:
                     overall_status = inv_grade_rank[min(grade_rank.get(g, 0) for g in top_grades)] if top_grades else "위험"
                 if "위험" in proc_grades and overall_status in {"양호", "주의"}:
                     overall_status = "경고"
-                status_color = {"양호": "#047857", "주의": "#1d4ed8", "경고": "#b45309", "위험": "#b91c1c"}
+                # 등급 컬러(직관): 양호/주의=차분(블루/블랙), 경고/위험=레드
+                status_color = {"양호": "#111827", "주의": "#1d4ed8", "경고": "#b91c1c", "위험": "#b91c1c"}
                 overall_status_html = f"<span style='color:{status_color.get(overall_status, '#111827')}'>{overall_status}</span>"
 
                 k_cols = st.columns([1.25, 1, 1, 1, 1, 1])
@@ -2833,17 +2834,21 @@ try:
                         )
                         # grade label (small) under the big number
                         try:
-                            fig_factory.add_trace(
-                                go.Scatter(
-                                    x=by_factory["공장"],
-                                    y=by_factory["종합점수"] + 6,
-                                    text=by_factory["등급"].apply(lambda g: f"({g})"),
-                                    mode="text",
-                                    textfont=dict(size=14, family="Arial", color="#6B7280"),
-                                    hoverinfo="skip",
-                                    showlegend=False,
+                            for g_label in ["양호", "주의", "경고", "위험"]:
+                                sub_g = by_factory[by_factory["등급"].astype(str) == g_label].copy()
+                                if len(sub_g) == 0:
+                                    continue
+                                fig_factory.add_trace(
+                                    go.Scatter(
+                                        x=sub_g["공장"],
+                                        y=sub_g["종합점수"] + 6,
+                                        text=sub_g["등급"].apply(lambda g: f"({g})"),
+                                        mode="text",
+                                        textfont=dict(size=14, family="Arial", color=status_color.get(g_label, "#111827")),
+                                        hoverinfo="skip",
+                                        showlegend=False,
+                                    )
                                 )
-                            )
                         except Exception:
                             pass
 
@@ -2925,7 +2930,7 @@ try:
                                     y=float(r["평균점수"]) + 4.5,
                                     text=f"({r['등급']})",
                                     showarrow=False,
-                                    font=dict(size=12, family="Arial", color="#6B7280"),
+                                    font=dict(size=12, family="Arial", color=status_color.get(str(r['등급']), "#111827")),
                                     xref=xaxis_name,
                                     yref=yaxis_name,
                                 )
