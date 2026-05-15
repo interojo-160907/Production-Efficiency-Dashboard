@@ -2808,15 +2808,16 @@ try:
 
                     comp_map = {str(r["공장그룹"]): r for _, r in comp.iterrows()}
                     donut_cols = st.columns([1, 1, 1, 0.55], gap="large")
-                    donut_colors = {"초과": "#EF4444", "비정형": "#F59E0B"}
+                    # 컬러 팔레트(공정 밸런스): 보라(정확) + 핑크레드(초과) + 오렌지(비정형)
+                    donut_colors = {"초과": "#F43F5E", "비정형": "#F97316"}
 
                     with donut_cols[3]:
                         st.markdown(
                             "<div style='padding:12px 12px; border:1px solid #E5E7EB; border-radius:12px; background:#F9FAFB;'>"
                             "<div style='font-weight:800; color:#111827; margin-bottom:10px;'>범례(도넛)</div>"
                             "<div style='display:flex; flex-direction:column; gap:10px;'>"
-                            "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#EF4444; display:inline-block;'></span><b>초과</b></div>"
-                            "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#F59E0B; display:inline-block;'></span><b>비정형</b></div>"
+                            "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#F43F5E; display:inline-block;'></span><b>초과</b></div>"
+                            "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#F97316; display:inline-block;'></span><b>비정형</b></div>"
                             "</div>"
                             "</div>",
                             unsafe_allow_html=True,
@@ -2928,8 +2929,8 @@ try:
                             "<div style='padding:12px 12px; border:1px solid #E5E7EB; border-radius:12px; background:#F9FAFB;'>"
                             "<div style='font-weight:800; color:#111827; margin-bottom:10px;'>범례(공정비교)</div>"
                             "<div style='display:flex; flex-direction:column; gap:10px;'>"
-                            "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#38BDF8; display:inline-block;'></span><b>정확</b></div>"
-                            "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#EF4444; display:inline-block;'></span><b>초과+비정형</b></div>"
+                            "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#7C3AED; display:inline-block;'></span><b>정확</b></div>"
+                            "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#F43F5E; display:inline-block;'></span><b>초과+비정형</b></div>"
                             "</div>"
                             "</div>",
                             unsafe_allow_html=True,
@@ -2958,8 +2959,8 @@ try:
                                     f"<div style='width:72px; color:#111827; font-size:13px;'>{proc_name}</div>"
                                     "<div style='flex:1; height:28px; border-radius:14px; background:#E5E7EB; overflow:hidden;'>"
                                     "<div style='display:flex; height:100%; width:100%;'>"
-                                    f"<div style='width:{p_ok:.2f}%; background:#38BDF8; display:flex; align-items:center; justify-content:center; font-size:12px; color:#0B1220; font-weight:700; border-top-left-radius:14px; border-bottom-left-radius:14px;'>{p_ok:.0f}%</div>"
-                                    f"<div style='width:{p_bad:.2f}%; background:#EF4444; display:flex; align-items:center; justify-content:center; font-size:12px; color:#0B1220; font-weight:700; border-top-right-radius:14px; border-bottom-right-radius:14px;'>{p_bad:.0f}%</div>"
+                                    f"<div style='width:{p_ok:.2f}%; background:#7C3AED; display:flex; align-items:center; justify-content:center; font-size:12px; color:white; font-weight:700; border-top-left-radius:14px; border-bottom-left-radius:14px;'>{p_ok:.0f}%</div>"
+                                    f"<div style='width:{p_bad:.2f}%; background:#F43F5E; display:flex; align-items:center; justify-content:center; font-size:12px; color:white; font-weight:700; border-top-right-radius:14px; border-bottom-right-radius:14px;'>{p_bad:.0f}%</div>"
                                     "</div>"
                                     "</div>"
                                     "</div>"
