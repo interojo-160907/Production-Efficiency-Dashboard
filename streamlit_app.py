@@ -2455,6 +2455,18 @@ try:
                 if "제품코드" in det.columns:
                     det["제품명"] = det["제품코드"].astype(str).str.slice(0, 5)
 
+                # 생산운영현황 탭과 동일한 3분할(정확/초과/비정형)로 맞추기:
+                # - 정확(유효) = min(생산, 필요)
+                # - 초과 = need>0 구간의 max(생산-필요, 0)
+                # - 비정형 = need==0 구간의 생산 전량
+                # 결과2에 이미 컬럼이 있어도(과생산량/불필요생산량) 중복 집계가 발생할 수 있어 재계산값으로 덮어씀
+                if {"실적수량", "필요수량"}.issubset(set(det.columns)):
+                    _prod = pd.to_numeric(det["실적수량"], errors="coerce").fillna(0).clip(lower=0)
+                    _need = pd.to_numeric(det["필요수량"], errors="coerce").fillna(0).clip(lower=0)
+                    det["유효생산량"] = np.minimum(_prod, _need)
+                    det["불필요생산량"] = np.where(_need <= 0, _prod, 0.0)
+                    det["과생산량"] = np.where(_need > 0, np.maximum(_prod - _need, 0.0), 0.0)
+
                 # ---- 공정 점수 산출(부족수량 기반 필요수량 사용 X) ----
                 # 1) 규격 대응 SKU 점수화: (필요 SKU ∩ 생산 SKU) / 생산 SKU
                 # 2) 정확대응 비중: 유효생산량 / 실적수량
