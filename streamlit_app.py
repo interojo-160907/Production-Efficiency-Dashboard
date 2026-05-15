@@ -2791,7 +2791,7 @@ try:
                     if len(proc_acs) == 0:
                         st.info("선택한 기간에 A/C/S관 데이터가 없습니다.")
                     else:
-                        chart_col, legend_col = st.columns([6, 1.1], gap="large")
+                        chart_col, legend_col = st.columns([6.3, 0.9], gap="large")
                         by_fac_proc = (
                             proc_acs.groupby(["공장그룹", "공정"], dropna=False)
                             .apply(
@@ -2826,7 +2826,7 @@ try:
                         )
                         fig_fac.update_layout(
                             height=chart_height,
-                            margin=dict(l=150, r=10, t=30, b=10),
+                            margin=dict(l=230, r=10, t=30, b=10),
                             showlegend=False,
                             xaxis_title="공정",
                             yaxis_title=None,
@@ -2839,11 +2839,11 @@ try:
                             if isinstance(ann.text, str) and "공장그룹=" in ann.text:
                                 raw = ann.text.replace("공장그룹=", "")
                                 ann.text = factory_display.get(raw, raw)
-                                ann.x = -0.08
+                                ann.x = -0.18
                                 ann.xanchor = "left"
                                 ann.yanchor = "middle"
                                 ann.textangle = 0
-                                ann.font = dict(size=18, family="Arial", color="#111827")
+                                ann.font = dict(size=16, family="Arial", color="#111827")
                         # y축 제목은 제거하고(기울어진 텍스트), tick/격자만 유지
                         fig_fac.update_yaxes(title_text="", tickfont=dict(size=14, family="Arial", color="#111827"))
                         fig_fac.update_xaxes(tickfont=dict(size=18, family="Arial", color="#111827"), title_font=dict(size=18, family="Arial", color="#111827"))
@@ -2855,14 +2855,14 @@ try:
                         with legend_col:
                             legend_items = "".join(
                                 [
-                                    f"<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:{proc_color_map.get(p, '#64748B')}; display:inline-block;'></span><b>{p}</b></div>"
+                                    f"<div style='display:flex; align-items:center; gap:8px;'><span style='width:10px; height:10px; border-radius:3px; background:{proc_color_map.get(p, '#64748B')}; display:inline-block;'></span><b>{p}</b></div>"
                                     for p in target_order
                                 ]
                             )
                             st.markdown(
-                                "<div style='padding:12px 12px; border:1px solid #E5E7EB; border-radius:12px; background:#F9FAFB;'>"
-                                "<div style='font-weight:800; color:#111827; margin-bottom:10px;'>범례(공정)</div>"
-                                f"<div style='display:flex; flex-direction:column; gap:10px;'>{legend_items}</div>"
+                                "<div style='padding:10px 10px; border:1px solid #E5E7EB; border-radius:12px; background:#F9FAFB;'>"
+                                "<div style='font-weight:800; font-size:13px; color:#111827; margin-bottom:8px;'>범례(공정)</div>"
+                                f"<div style='display:flex; flex-direction:column; gap:8px; font-size:13px;'>{legend_items}</div>"
                                 "</div>",
                                 unsafe_allow_html=True,
                             )
