@@ -3063,6 +3063,7 @@ try:
                                 )
                             st.markdown("".join(rows_html), unsafe_allow_html=True)
 
+                st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
                 st.markdown("#### 공장별 요약")
                 summary = (
                     proc.groupby(["날짜_date", "공장그룹", "공장", "공정"], dropna=False)[
@@ -3133,9 +3134,9 @@ try:
                         _summary_fmt[c] = "{:,.0f}"
                 for c in _summary_view.columns:
                     if isinstance(c, str) and c.endswith("(%)"):
-                        _summary_fmt[c] = "{:.1f}"
+                        _summary_fmt[c] = "{:.1f}%"
                 if "공정점수" in _summary_view.columns:
-                    _summary_fmt["공정점수"] = "{:.1f}"
+                    _summary_fmt["공정점수"] = "{:.1f}점"
                 st.dataframe(_summary_view.style.format(_summary_fmt), use_container_width=True, height=420)
 
                 st.markdown("#### 상세 테이블")
