@@ -2637,17 +2637,17 @@ try:
                         proc["규격대응률(%)"] >= 70,
                         proc["규격대응률(%)"] >= 55,
                     ],
-                    [100.0, 85.0, 70.0],
+                    [100.0, 75.0, 65.0],
                     default=55.0,
                 )
                 proc["공정점수"] = np.minimum(proc["공정점수_raw"], cap).clip(0, 100)
 
-                # 등급(분포가 너무 낮게 깔리는 것을 방지하기 위해 기준을 현실화)
+                # 등급(공정별 기준)
                 proc["상태"] = np.select(
                     [
-                        proc["공정점수"] >= 85,
-                        proc["공정점수"] >= 70,
+                        proc["공정점수"] >= 60,
                         proc["공정점수"] >= 55,
+                        proc["공정점수"] >= 50,
                     ],
                     ["양호", "주의", "경고"],
                     default="위험",
@@ -2668,10 +2668,11 @@ try:
                 worst_proc = by_proc.sort_values("평균점수").iloc[0]["공정"] if len(by_proc) else "-"
                 risk_count = int((by_proc["평균점수"] < 70).sum()) if len(by_proc) else 0
 
+                # 등급(공장/전체 종합 기준): 공정보다 5pt 낮게 적용
                 overall_status = (
-                    "양호" if overall >= 85 else
-                    "주의" if overall >= 70 else
-                    "경고" if overall >= 55 else
+                    "양호" if overall >= 55 else
+                    "주의" if overall >= 50 else
+                    "경고" if overall >= 45 else
                     "위험"
                 )
                 status_color = {"양호": "#047857", "주의": "#1d4ed8", "경고": "#b45309", "위험": "#b91c1c"}
@@ -2680,11 +2681,11 @@ try:
                 proc_score_map = {str(r["공정"]): float(r["평균점수"]) for _, r in by_proc.iterrows()} if len(by_proc) else {}
 
                 def _grade(score: float) -> str:
-                    if score >= 85:
+                    if score >= 60:
                         return "양호"
-                    if score >= 70:
-                        return "주의"
                     if score >= 55:
+                        return "주의"
+                    if score >= 50:
                         return "경고"
                     return "위험"
 
@@ -2720,7 +2721,8 @@ try:
                         "- `초과생산비중(%)` : `과생산량 ÷ 실적수량`\n"
                         "- `비정형생산비중(%)` : `불필요생산량 ÷ 실적수량`\n"
                         "- `공정점수(0~100)` : `0.45×규격대응률 + 0.25×정확대응비중 + 0.10×(100-초과생산비중) + 0.20×(100-비정형생산비중)` (규격대응률이 낮으면 상한 적용)\n"
-                        "- `등급` : 85↑ 양호 / 70↑ 주의 / 55↑ 경고 / 55↓ 위험\n"
+                        "- `등급(공정)` : 60↑ 양호 / 55↑ 주의 / 50↑ 경고 / 50↓ 위험\n"
+                        "- `등급(공장 종합)` : 55↑ 양호 / 50↑ 주의 / 45↑ 경고 / 45↓ 위험\n"
                         "- `종합점수(공장/전체)` : 각 `공정점수`의 `실적수량` 가중평균"
                     )
                     st.caption("참고: 공정 밸런스는 `유효생산량_결과2.xlsx`의 `매칭결과` 시트를 기반으로 계산합니다.")
@@ -3144,12 +3146,12 @@ try:
                         summary["규격대응률(%)"] >= 70,
                         summary["규격대응률(%)"] >= 55,
                     ],
-                    [100.0, 85.0, 70.0],
+                    [100.0, 75.0, 65.0],
                     default=55.0,
                 )
                 summary["공정점수"] = np.minimum(summary["공정점수_raw"], cap).clip(0, 100)
                 summary["상태"] = np.select(
-                    [summary["공정점수"] >= 85, summary["공정점수"] >= 70, summary["공정점수"] >= 55],
+                    [summary["공정점수"] >= 60, summary["공정점수"] >= 55, summary["공정점수"] >= 50],
                     ["양호", "주의", "경고"],
                     default="위험",
                 )
