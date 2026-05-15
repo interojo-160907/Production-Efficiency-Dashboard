@@ -2944,7 +2944,7 @@ try:
                                 go.Pie(
                                     labels=["초과", "비정형"],
                                     values=[over_share, waste_share],
-                                    hole=0.62,
+                                    hole=0.56,
                                     sort=False,
                                     direction="clockwise",
                                     marker=dict(colors=[donut_colors["초과"], donut_colors["비정형"]]),
@@ -2952,7 +2952,7 @@ try:
                                     texttemplate="%{percent:.1%}",
                                     textposition="inside",
                                     insidetextorientation="horizontal",
-                                    textfont=dict(size=22, family="Arial", color="#111827"),
+                                    textfont=dict(size=26, family="Arial Black", color="#0B1220"),
                                     hovertemplate="%{label}<br>비중=%{percent}<br>실적대비=%{customdata:.1f}%<extra></extra>",
                                     customdata=[over, waste],
                                 )
@@ -2970,7 +2970,7 @@ try:
                                     text=f"감점<br><b>{penalty_total:.1f}</b>",
                                     x=0.5,
                                     y=0.5,
-                                    font=dict(size=28, family="Arial", color="#B91C1C"),
+                                    font=dict(size=34, family="Arial Black", color="#B91C1C"),
                                     showarrow=False,
                                 )
                             ],
