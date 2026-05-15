@@ -2812,13 +2812,16 @@ try:
 
                     with donut_cols[3]:
                         st.markdown(
+                            "<div style='display:flex; flex-direction:column; gap:12px;'>"
                             "<div style='padding:12px 12px; border:1px solid #E5E7EB; border-radius:12px; background:#F9FAFB;'>"
-                            "<div style='font-weight:800; color:#111827; margin-bottom:10px;'>범례</div>"
+                            "<div style='font-weight:800; color:#111827; margin-bottom:10px;'>범례(도넛)</div>"
                             "<div style='display:flex; flex-direction:column; gap:10px;'>"
                             "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#EF4444; display:inline-block;'></span><b>초과</b></div>"
                             "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#F59E0B; display:inline-block;'></span><b>비정형</b></div>"
-                            "<div style='height:10px;'></div>"
-                            "<div style='font-weight:800; color:#111827; margin-bottom:6px;'>공정비교</div>"
+                            "</div>"
+                            "</div>"
+                            "<div style='padding:12px 12px; border:1px solid #E5E7EB; border-radius:12px; background:#F9FAFB;'>"
+                            "<div style='font-weight:800; color:#111827; margin-bottom:10px;'>범례(공정비교)</div>"
                             "<div style='display:flex; flex-direction:column; gap:10px;'>"
                             "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#38BDF8; display:inline-block;'></span><b>정확</b></div>"
                             "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#EF4444; display:inline-block;'></span><b>초과+비정형</b></div>"
