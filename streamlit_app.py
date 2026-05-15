@@ -2668,13 +2668,26 @@ try:
                 worst_proc = by_proc.sort_values("평균점수").iloc[0]["공정"] if len(by_proc) else "-"
                 risk_count = int((by_proc["평균점수"] < 70).sum()) if len(by_proc) else 0
 
-                # 등급(공장/전체 종합 기준): 공정보다 5pt 낮게 적용
-                overall_status = (
-                    "양호" if overall >= 65 else
-                    "주의" if overall >= 60 else
-                    "경고" if overall >= 55 else
-                    "위험"
-                )
+                # 종합 등급: 공정 5개 등급의 다수결(3개 이상) / 2-2-1이면 낮은 등급 선택
+                # 안전장치: '위험' 공정이 1개라도 있으면 종합은 최대 '경고'
+                grade_rank = {"양호": 3, "주의": 2, "경고": 1, "위험": 0}
+                inv_grade_rank = {v: k for k, v in grade_rank.items()}
+                proc_grades = [_grade(float(proc_score_map.get(p, 0.0))) for p in target_order]
+                counts: dict[str, int] = {}
+                for g in proc_grades:
+                    counts[g] = counts.get(g, 0) + 1
+                # Majority (>=3)
+                majority = next((g for g, n in counts.items() if n >= 3), None)
+                if majority is not None:
+                    overall_status = majority
+                else:
+                    max_n = max(counts.values()) if counts else 0
+                    top_grades = [g for g, n in counts.items() if n == max_n]
+                    # Choose the lower (worse) grade among tied top grades
+                    overall_status = inv_grade_rank[min(grade_rank.get(g, 0) for g in top_grades)] if top_grades else "위험"
+
+                if "위험" in proc_grades and overall_status in {"양호", "주의"}:
+                    overall_status = "경고"
                 status_color = {"양호": "#047857", "주의": "#1d4ed8", "경고": "#b45309", "위험": "#b91c1c"}
                 overall_status_html = f"<span style='color:{status_color.get(overall_status, '#111827')}'>{overall_status}</span>"
 
@@ -2722,7 +2735,7 @@ try:
                         "- `비정형생산비중(%)` : `불필요생산량 ÷ 실적수량`\n"
                         "- `공정점수(0~100)` : `0.45×규격대응률 + 0.25×정확대응비중 + 0.10×(100-초과생산비중) + 0.20×(100-비정형생산비중)` (규격대응률이 낮으면 상한 적용)\n"
                         "- `등급(공정)` : 70↑ 양호 / 65↑ 주의 / 60↑ 경고 / 60↓ 위험\n"
-                        "- `등급(공장 종합)` : 65↑ 양호 / 60↑ 주의 / 55↑ 경고 / 55↓ 위험\n"
+                        "- `등급(공장 종합)` : 공정 5개 등급의 다수결(동률이면 낮은 등급, 위험 1개면 최대 경고)\n"
                         "- `종합점수(공장/전체)` : 각 `공정점수`의 `실적수량` 가중평균"
                     )
                     st.caption("참고: 공정 밸런스는 `유효생산량_결과2.xlsx`의 `매칭결과` 시트를 기반으로 계산합니다.")
