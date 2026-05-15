@@ -2983,10 +2983,10 @@ try:
                             uniformtext_mode="show",
                             annotations=[
                                 dict(
-                                    text=f"감점<br><b>{penalty_total:.1f}</b>",
+                                    text=f"<span style='font-size:16px; font-weight:700; opacity:0.85;'>감점</span><br><b>{penalty_total:.1f}</b>",
                                     x=0.5,
                                     y=0.5,
-                                    font=dict(size=34, family="Arial Black", color="#B91C1C"),
+                                    font=dict(size=38, family="Arial Black", color="#B91C1C"),
                                     showarrow=False,
                                 )
                             ],
@@ -3071,8 +3071,8 @@ try:
                                     f"<div style='width:72px; color:#111827; font-size:13px;'>{proc_name}</div>"
                                     "<div style='flex:1; height:28px; border-radius:14px; background:#E5E7EB; overflow:hidden;'>"
                                     "<div style='display:flex; height:100%; width:100%;'>"
-                                    f"<div style='width:{p_ok:.2f}%; background:{BALANCE_COLORS['정확']}; display:flex; align-items:center; justify-content:center; font-size:12px; color:white; font-weight:700; border-top-left-radius:14px; border-bottom-left-radius:14px;'>{p_ok:.1f}%</div>"
-                                    f"<div style='width:{p_bad:.2f}%; background:{BALANCE_COLORS['초과+비정형']}; display:flex; align-items:center; justify-content:center; font-size:12px; color:white; font-weight:700; border-top-right-radius:14px; border-bottom-right-radius:14px;'>{p_bad:.1f}%</div>"
+                                    f"<div style='width:{p_ok:.2f}%; background:{BALANCE_COLORS['정확']}; display:flex; align-items:center; justify-content:center; font-size:14px; color:white; font-weight:800; border-top-left-radius:14px; border-bottom-left-radius:14px;'>{p_ok:.1f}%</div>"
+                                    f"<div style='width:{p_bad:.2f}%; background:{BALANCE_COLORS['초과+비정형']}; display:flex; align-items:center; justify-content:center; font-size:14px; color:white; font-weight:800; border-top-right-radius:14px; border-bottom-right-radius:14px;'>{p_bad:.1f}%</div>"
                                     "</div>"
                                     "</div>"
                                     "</div>"
