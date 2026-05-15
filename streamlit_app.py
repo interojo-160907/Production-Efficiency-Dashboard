@@ -3,11 +3,9 @@ from pathlib import Path
 import calendar
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
-import base64
 import numpy as np
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 import plotly.graph_objects as go
 import plotly.express as px
 import io
@@ -1136,6 +1134,18 @@ st.set_page_config(page_title=DASHBOARD_TITLE, layout="wide", initial_sidebar_st
 # CSS 스타일링
 st.markdown("""
 <style>
+    /* ====== App background (soft beige, like reference) ====== */
+    html, body, .stApp, [data-testid="stAppViewContainer"] {
+        background-color: #FBF7EF;
+    }
+    /* Keep header/toolbar transparent so background looks consistent */
+    [data-testid="stHeader"] {
+        background: transparent;
+    }
+    [data-testid="stToolbar"] {
+        right: 0.5rem;
+    }
+
     [data-testid="metric.container"] {
         background-color: #f0f4f8;
         border-radius: 10px;
@@ -3438,40 +3448,37 @@ try:
                 with ctl_l:
                     show_tables = st.toggle("공장별 요약/상세 테이블 보기", value=False)
                 with ctl_r:
-                    if st.button("요약+상세 다운로드 (xlsx)", use_container_width=True, type="primary"):
+                    # 원클릭 다운로드를 위해(생산운영현황 탭과 동일 패턴):
+                    # - 필요 시 미리(리런 중) 생성해 session_state에 보관
+                    # - download_button은 준비된 bytes를 바로 내려줌
+                    export_key = "balance_export_excel_bytes"
+                    export_sig_key = "balance_export_excel_signature"
+                    signature = (
+                        str(start_date),
+                        str(end_date),
+                        int(len(proc)),
+                        int(len(det)) if isinstance(det, pd.DataFrame) else 0,
+                    )
+                    needs_rebuild = (
+                        export_key not in st.session_state
+                        or export_sig_key not in st.session_state
+                        or st.session_state.get(export_sig_key) != signature
+                    )
+                    if needs_rebuild:
                         with st.spinner("다운로드 파일 준비 중..."):
                             summary_view, det_show = build_balance_tables_for_export(proc, det)
-                            data = build_two_sheet_excel(summary_view, det_show, sheet1="공장별요약", sheet2="상세테이블")
-                        b64 = base64.b64encode(data).decode("ascii")
-                        fname = f"공정밸런스_요약+상세_{start_date}_{end_date}.xlsx"
-                        # one-click download (auto-trigger via JS). Fallback: show a normal download button.
-                        components.html(
-                            f"""
-                            <script>
-                              const b64 = "{b64}";
-                              const byteChars = atob(b64);
-                              const byteNums = new Array(byteChars.length);
-                              for (let i = 0; i < byteChars.length; i++) byteNums[i] = byteChars.charCodeAt(i);
-                              const blob = new Blob([new Uint8Array(byteNums)], {{type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}});
-                              const url = URL.createObjectURL(blob);
-                              const a = document.createElement("a");
-                              a.href = url;
-                              a.download = "{fname}";
-                              document.body.appendChild(a);
-                              a.click();
-                              a.remove();
-                              setTimeout(() => URL.revokeObjectURL(url), 1000);
-                            </script>
-                            """,
-                            height=0,
-                        )
-                        st.download_button(
-                            "다운로드가 안 되면 여기 클릭",
-                            data=data,
-                            file_name=fname,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True,
-                        )
+                            st.session_state[export_key] = build_two_sheet_excel(summary_view, det_show, sheet1="공장별요약", sheet2="상세테이블")
+                            st.session_state[export_sig_key] = signature
+                    data = st.session_state.get(export_key, b"")
+                    st.download_button(
+                        "요약+상세 다운로드 (xlsx)",
+                        data=data,
+                        file_name=f"공정밸런스_요약+상세_{start_date}_{end_date}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        type="primary",
+                        disabled=not bool(data),
+                    )
 
                 if show_tables:
                     summary_view, det_show = build_balance_tables_for_export(proc, det)
