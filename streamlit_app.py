@@ -364,9 +364,9 @@ def _build_excel_report_bytes(
                         "gap": 70,
                         "overlap": 0,
                         "points": [
-                            {"fill": {"color": "#0b63ce"}},  # A관
-                            {"fill": {"color": "#8fd0ff"}},  # C관
-                            {"fill": {"color": "#ff2b2b"}},  # S관
+                            {"fill": {"color": FACTORY_COLOR_MAP["A관"]}},  # A관
+                            {"fill": {"color": FACTORY_COLOR_MAP["C관"]}},  # C관
+                            {"fill": {"color": FACTORY_COLOR_MAP["S관"]}},  # S관
                         ],
                         "border": {"none": True},
                     }
@@ -506,7 +506,7 @@ def _build_excel_report_bytes(
                 chart2.set_plotarea({"border": {"none": True}, "fill": {"color": "#ffffff"}})
                 chart2.set_chartarea({"border": {"none": True}, "fill": {"color": "#ffffff"}})
 
-                series_colors = ["#0b63ce", "#8fd0ff", "#ff2b2b"]
+                series_colors = [FACTORY_COLOR_MAP["A관"], FACTORY_COLOR_MAP["C관"], FACTORY_COLOR_MAP["S관"]]
 
                 for j, col_name in enumerate(wide.columns[1:], start=1):
                     val_c = src_col + j
@@ -3182,6 +3182,7 @@ try:
                         _summary_fmt[c] = "{:.1f}%"
                 if "공정점수" in _summary_view.columns:
                     _summary_fmt["공정점수"] = "{:.1f}점"
+                # pandas Styler는 큰 데이터에서 느릴 수 있어, 요약은 styler 유지(행 수가 작음)
                 st.dataframe(_summary_view.style.format(_summary_fmt), use_container_width=True, height=420)
 
                 st.markdown("#### 상세 테이블")
@@ -3202,7 +3203,12 @@ try:
                 for c in value_cols:
                     if c in det_show.columns:
                         _det_fmt[c] = "{:,.0f}"
-                st.dataframe(det_show.style.format(_det_fmt), use_container_width=True, height=520)
+                # 상세 테이블은 행이 많을 수 있어 성능을 위해 큰 경우 styler 대신 원본 렌더링
+                if len(det_show) <= 3000:
+                    st.dataframe(det_show.style.format(_det_fmt), use_container_width=True, height=520)
+                else:
+                    st.caption(f"표시 행이 많아({len(det_show):,}행) 빠른 렌더링 모드로 표시합니다.")
+                    st.dataframe(det_show, use_container_width=True, height=520)
 except Exception as e:
     st.error("❌ 오류가 발생했습니다.")
     st.code(_truncate_err_message(str(e)), language="text")
