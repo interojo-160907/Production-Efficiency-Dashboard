@@ -2807,16 +2807,26 @@ try:
                     score_map = {str(r["공장그룹"]): float(r["종합점수"]) for _, r in by_factory_score.iterrows()}
 
                     comp_map = {str(r["공장그룹"]): r for _, r in comp.iterrows()}
-                    donut_cols = st.columns(3, gap="large")
+                    donut_cols = st.columns([1, 1, 1, 0.55], gap="large")
                     donut_colors = {"초과": "#EF4444", "비정형": "#F59E0B"}
 
-                    legend_html = (
-                        "<div style='display:flex; gap:16px; align-items:center; margin:6px 0 10px 0; flex-wrap:wrap;'>"
-                        "<div style='display:flex; align-items:center; gap:8px;'><span style='width:12px; height:12px; border-radius:3px; background:#EF4444; display:inline-block;'></span><b>초과</b></div>"
-                        "<div style='display:flex; align-items:center; gap:8px;'><span style='width:12px; height:12px; border-radius:3px; background:#F59E0B; display:inline-block;'></span><b>비정형</b></div>"
-                        "</div>"
-                    )
-                    st.markdown(legend_html, unsafe_allow_html=True)
+                    with donut_cols[3]:
+                        st.markdown(
+                            "<div style='padding:12px 12px; border:1px solid #E5E7EB; border-radius:12px; background:#F9FAFB;'>"
+                            "<div style='font-weight:800; color:#111827; margin-bottom:10px;'>범례</div>"
+                            "<div style='display:flex; flex-direction:column; gap:10px;'>"
+                            "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#EF4444; display:inline-block;'></span><b>초과</b></div>"
+                            "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#F59E0B; display:inline-block;'></span><b>비정형</b></div>"
+                            "<div style='height:10px;'></div>"
+                            "<div style='font-weight:800; color:#111827; margin-bottom:6px;'>공정비교</div>"
+                            "<div style='display:flex; flex-direction:column; gap:10px;'>"
+                            "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#38BDF8; display:inline-block;'></span><b>정확</b></div>"
+                            "<div style='display:flex; align-items:center; gap:10px;'><span style='width:12px; height:12px; border-radius:3px; background:#EF4444; display:inline-block;'></span><b>초과+비정형</b></div>"
+                            "</div>"
+                            "</div>"
+                            "</div>",
+                            unsafe_allow_html=True,
+                        )
 
                     for idx, g in enumerate(factory_order):
                         row = comp_map.get(str(g))
@@ -2881,13 +2891,6 @@ try:
 
                     # 공정별은 "정확대응 vs (초과+비정형)" 100% 누적 가로 막대로 표현(비중)
                     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-                    st.markdown(
-                        "<div style='display:flex; gap:16px; align-items:center; margin:6px 0 8px 0; flex-wrap:wrap;'>"
-                        "<div style='display:flex; align-items:center; gap:8px;'><span style='width:12px; height:12px; border-radius:3px; background:#38BDF8; display:inline-block;'></span><b>정확</b></div>"
-                        "<div style='display:flex; align-items:center; gap:8px;'><span style='width:12px; height:12px; border-radius:3px; background:#EF4444; display:inline-block;'></span><b>초과+비정형</b></div>"
-                        "</div>",
-                        unsafe_allow_html=True,
-                    )
                     # 공정별 비교는 '정확대응비중' vs '(초과생산비중+비정형생산비중)'을 100%로 정규화해서 표현
                     proc_comp = (
                         proc_acs.groupby(["공장그룹", "공정"], dropna=False)[
