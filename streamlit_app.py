@@ -1767,15 +1767,18 @@ def _safe_dataframe(
     height: int | None = None,
     hide_index: bool = True,
 ) -> None:
+    kwargs: dict[str, Any] = {"use_container_width": True, "hide_index": hide_index}
+    if height is not None:
+        kwargs["height"] = int(height)
     if df is None:
-        st.dataframe(pd.DataFrame(), use_container_width=True, hide_index=hide_index, height=height)
+        st.dataframe(pd.DataFrame(), **kwargs)
         return
     if fmt and len(df) <= max_style_rows:
-        st.dataframe(df.style.format(fmt), use_container_width=True, hide_index=hide_index, height=height)
+        st.dataframe(df.style.format(fmt), **kwargs)
         return
     if fmt and len(df) > max_style_rows:
         st.caption(f"표시 행이 많아({len(df):,}행) 스타일링을 생략하고 표시합니다.")
-    st.dataframe(df, use_container_width=True, hide_index=hide_index, height=height)
+    st.dataframe(df, **kwargs)
 
 
 # 결과 파일 선택(월별 분리 저장 지원)
@@ -2059,7 +2062,14 @@ try:
         _months_in_range = _months_between(start_date, end_date)
 
         # 대용량(매칭결과)은 기본 미로드. 필요한 화면/기능에서만 사용하도록 옵션 제공.
-        load_detail = st.sidebar.toggle("상세(매칭결과) 로드", value=False)
+        detail_available = _store_has_table(store_dir, "result1_matching")
+        load_detail = st.sidebar.toggle(
+            "상세(매칭결과) 로드",
+            value=False,
+            disabled=not detail_available,
+        )
+        if not detail_available:
+            st.sidebar.caption("상세는 저장되지 않았습니다(WRITE_DETAIL_STORE=0).")
 
         matching_result = pd.DataFrame()
         if load_detail:
@@ -2086,19 +2096,15 @@ try:
         # 공정 밸런스(전공정): store 우선 사용(엑셀 로드로 인한 메모리 폭증 방지)
         if main_tab == "공정 밸런스":
             process_daily = load_store_table(_store_dir_str, "result2_process_daily", _months_in_range)
-            process_detail = load_store_table(
-                _store_dir_str,
-                "result2_matching",
-                _months_in_range,
-                columns=("날짜", "공장", "공정", "신규분류요약", "제품코드", "실적수량", "필요수량", "부족수량"),
-            )
             process_daily = _ensure_date_column(process_daily, src_col="날짜", out_col="날짜_date")
-            process_detail = _ensure_date_column(process_detail, src_col="날짜", out_col="날짜_date")
             process_has_sheet = len(process_daily) > 0
-            process_detail_has_sheet = len(process_detail) > 0
-            # 기존 계산 함수는 엑셀 로더에 묶여 있어, store 모드에서는 화면에서 직접 사용하는 부분만 최소 집계로 대체합니다.
-            process_proc_base = pd.DataFrame()
-            process_det_base = pd.DataFrame()
+
+            process_proc_base = load_store_table(_store_dir_str, "result2_proc_base", _months_in_range)
+            process_det_base = load_store_table(_store_dir_str, "result2_det_base", _months_in_range)
+            process_proc_base = _ensure_date_column(process_proc_base, src_col="날짜", out_col="날짜_date")
+            process_det_base = _ensure_date_column(process_det_base, src_col="날짜", out_col="날짜_date")
+            process_detail = pd.DataFrame()
+            process_detail_has_sheet = len(process_proc_base) > 0
 
     # 필터 적용 (기간 범위)
     daily_summary_filtered = daily_summary[
@@ -3024,8 +3030,8 @@ try:
         st.markdown("### ⚖️ 공정 밸런스")
         if not result2_candidates:
             st.info("`유효생산량_결과2*.xlsx` 파일을 찾을 수 없습니다. 결과2를 생성한 뒤, repo 루트 또는 `outputs/`에 넣어주세요.")
-        elif (process_proc_base is None) or (len(process_proc_base) == 0) or (not process_detail_has_sheet):
-            st.info("`매칭결과` 시트가 없거나 데이터가 없습니다. (공정 밸런스 점수 계산 불가)")
+        elif (process_proc_base is None) or (len(process_proc_base) == 0):
+            st.info("공정 밸런스 집계 데이터가 없습니다. (result2_proc_base) 전처리 결과를 확인해주세요.")
         else:
             # 미리 집계된 proc_base/det_base를 기간 필터만 적용(리런 속도↑)
             proc_base = process_proc_base
