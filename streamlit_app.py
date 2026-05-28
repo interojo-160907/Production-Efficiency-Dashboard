@@ -1808,6 +1808,28 @@ try:
         st.cache_resource.clear()
         st.sidebar.success("캐시를 비웠습니다. 새로고침하세요.")
 
+    with st.sidebar.expander("store 상태(월 파티션)", expanded=False):
+        manifest_path = store_dir / "manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                updated_at = manifest.get("updated_at", "")
+                months_refreshed = manifest.get("months_refreshed", [])
+                tables = manifest.get("tables", {})
+                if updated_at:
+                    st.caption(f"updated_at: {updated_at}")
+                if months_refreshed:
+                    st.caption(f"months_refreshed: {', '.join(months_refreshed)}")
+                for k in sorted(tables.keys()):
+                    months = tables.get(k, [])
+                    if not months:
+                        continue
+                    st.caption(f"- {k}: {', '.join(months)}")
+            except Exception:
+                st.caption("manifest.json을 읽을 수 없습니다.")
+        else:
+            st.caption("manifest.json이 없습니다. (store를 아직 생성/푸시하지 않았을 수 있습니다.)")
+
     # 결과 파일이 repo 루트뿐 아니라 `outputs/` 아래에 저장되는 경우도 있어 함께 검색합니다.
     search_dirs = [base_dir, base_dir / "outputs", base_dir / "outputs" / "archive"]
 
@@ -2011,7 +2033,11 @@ try:
         if use_store:
             _months_avail = list_store_months(str(store_dir), "result1_daily")
             if not _has_month(_months_avail, prev_month_ym):
-                st.warning(f"전월({prev_month_ym}) 데이터가 store에 없습니다. 전처리에서 해당 기간을 생성 후 푸시해주세요.")
+                st.warning(
+                    f"전월({prev_month_ym}) 데이터가 store에 없습니다. "
+                    "전처리를 전월로 한 번 더 돌린 뒤, 생성된 `outputs/store/**/YYYY-MM.parquet` 을 GitHub에 푸시해주세요. "
+                    "(예: `APS_MODE=prev_month` 또는 `RANGE_START/RANGE_END` 사용)"
+                )
         start_date = prev_month_start
         end_date = last_day_prev
     else:  # 기간조회

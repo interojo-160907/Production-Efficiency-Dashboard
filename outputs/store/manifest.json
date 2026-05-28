@@ -1,43 +1,53 @@
 {
-  "updated_at": "2026-05-28T15:26:51",
+  "updated_at": "2026-05-28T15:39:00",
   "months_refreshed": [
-    "2026-05"
+    "2026-04"
   ],
   "tables": {
     "result1_daily": [
+      "2026-04",
       "2026-05"
     ],
     "result1_factory": [
+      "2026-04",
       "2026-05"
     ],
     "result1_matching": [
       "2026-05"
     ],
     "result1_spec_daily": [
+      "2026-04",
       "2026-05"
     ],
     "result1_spec_factory_class_daily": [
+      "2026-04",
       "2026-05"
     ],
     "result1_spec_factory_daily": [
+      "2026-04",
       "2026-05"
     ],
     "result2_daily": [
+      "2026-04",
       "2026-05"
     ],
     "result2_det_base": [
+      "2026-04",
       "2026-05"
     ],
     "result2_factory": [
+      "2026-04",
       "2026-05"
     ],
     "result2_matching": [
       "2026-05"
     ],
     "result2_process_daily": [
+      "2026-04",
       "2026-05"
     ],
     "result2_proc_base": [
+      "2026-04",
       "2026-05"
     ]
   }
