@@ -2093,6 +2093,13 @@ try:
         sku_daily_factory = _ensure_date_column(sku_daily_factory, src_col="날짜", out_col="날짜_date")
         sku_daily_factory_class = _ensure_date_column(sku_daily_factory_class, src_col="날짜", out_col="날짜_date")
 
+        # store 모드에서는 이 시점에 factory_summary가 확정되므로, 이후 필터링에 사용될 플래그를 갱신합니다.
+        factory_has_dates = factory_summary is not None and len(factory_summary) > 0 and "생산일자_date" in factory_summary.columns
+        if factory_has_dates:
+            for col in ["총실적", "총부족수량", "유효생산량", "과생산량", "불필요생산량"]:
+                if col in factory_summary.columns:
+                    factory_summary[col] = pd.to_numeric(factory_summary[col], errors="coerce").fillna(0)
+
         # 공정 밸런스(전공정): store 우선 사용(엑셀 로드로 인한 메모리 폭증 방지)
         if main_tab == "공정 밸런스":
             process_daily = load_store_table(_store_dir_str, "result2_process_daily", _months_in_range)
@@ -3028,9 +3035,7 @@ try:
 
     if main_tab == "공정 밸런스":
         st.markdown("### ⚖️ 공정 밸런스")
-        if not result2_candidates:
-            st.info("`유효생산량_결과2*.xlsx` 파일을 찾을 수 없습니다. 결과2를 생성한 뒤, repo 루트 또는 `outputs/`에 넣어주세요.")
-        elif (process_proc_base is None) or (len(process_proc_base) == 0):
+        if (process_proc_base is None) or (len(process_proc_base) == 0):
             st.info("공정 밸런스 집계 데이터가 없습니다. (result2_proc_base) 전처리 결과를 확인해주세요.")
         else:
             # 미리 집계된 proc_base/det_base를 기간 필터만 적용(리런 속도↑)
