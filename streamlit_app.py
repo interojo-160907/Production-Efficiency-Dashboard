@@ -1490,7 +1490,12 @@ def list_store_months(store_dir_str: str, table: str) -> tuple[str, ...]:
 
 
 @st.cache_data(show_spinner=False)
-def load_store_table(store_dir_str: str, table: str, months: tuple[str, ...]) -> pd.DataFrame:
+def load_store_table(
+    store_dir_str: str,
+    table: str,
+    months: tuple[str, ...],
+    columns: tuple[str, ...] | None = None,
+) -> pd.DataFrame:
     store_dir = Path(store_dir_str)
     tdir = store_dir / table
     if not tdir.exists():
@@ -1502,7 +1507,7 @@ def load_store_table(store_dir_str: str, table: str, months: tuple[str, ...]) ->
         if not p.exists():
             continue
         try:
-            frames.append(pd.read_parquet(p))
+            frames.append(pd.read_parquet(p, columns=list(columns) if columns else None))
         except Exception:
             continue
 
@@ -1784,6 +1789,10 @@ try:
     store_dir = Path(store_dir_str) if store_dir_str else _default_store_dir
     store_available = _store_has_table(store_dir, "result1_daily")
     use_store = st.sidebar.toggle("Parquet(store) 사용(추천)", value=store_available, disabled=not store_available)
+    if st.sidebar.button("캐시 비우기"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.sidebar.success("캐시를 비웠습니다. 새로고침하세요.")
 
     # 결과 파일이 repo 루트뿐 아니라 `outputs/` 아래에 저장되는 경우도 있어 함께 검색합니다.
     search_dirs = [base_dir, base_dir / "outputs", base_dir / "outputs" / "archive"]
@@ -2049,7 +2058,19 @@ try:
         _store_dir_str = str(store_dir)
         _months_in_range = _months_between(start_date, end_date)
 
-        matching_result = load_store_table(_store_dir_str, "result1_matching", _months_in_range)
+        # 대용량(매칭결과)은 기본 미로드. 필요한 화면/기능에서만 사용하도록 옵션 제공.
+        load_detail = st.sidebar.toggle("상세(매칭결과) 로드", value=False)
+
+        matching_result = pd.DataFrame()
+        if load_detail:
+            matching_result = load_store_table(
+                _store_dir_str,
+                "result1_matching",
+                _months_in_range,
+                # 컬럼을 제한하면 메모리가 크게 줄어듭니다.
+                columns=("날짜", "생산일자", "공장", "신규분류요약", "제품코드", "양품수량", "부족수량"),
+            )
+
         factory_summary = load_store_table(_store_dir_str, "result1_factory", _months_in_range)
         sku_daily_all = _normalize_spec_cols(load_store_table(_store_dir_str, "result1_spec_daily", _months_in_range))
         sku_daily_factory = _normalize_spec_cols(load_store_table(_store_dir_str, "result1_spec_factory_daily", _months_in_range))
@@ -2060,13 +2081,22 @@ try:
         sku_daily_all = _ensure_date_column(sku_daily_all, src_col="날짜", out_col="날짜_date")
         sku_daily_factory = _ensure_date_column(sku_daily_factory, src_col="날짜", out_col="날짜_date")
 
-        # 공정 밸런스(전공정): 기존 엑셀 결과2도 함께 지원(Parquet 전환 전까지 호환)
-        if main_tab == "공정 밸런스" and result2_candidates:
-            result2_paths = tuple(str(p) for p in result2_candidates)
-            mtime2_nss = tuple(int(p.stat().st_mtime_ns) for p in result2_candidates)
-            process_daily, process_has_sheet = load_process_balance_excels(result2_paths, mtime2_nss)
-            process_detail, process_detail_has_sheet = load_process_balance_detail_excels(result2_paths, mtime2_nss)
-            process_proc_base, process_det_base, _ = load_process_balance_prepared(result2_paths, mtime2_nss)
+        # 공정 밸런스(전공정): store 우선 사용(엑셀 로드로 인한 메모리 폭증 방지)
+        if main_tab == "공정 밸런스":
+            process_daily = load_store_table(_store_dir_str, "result2_process_daily", _months_in_range)
+            process_detail = load_store_table(
+                _store_dir_str,
+                "result2_matching",
+                _months_in_range,
+                columns=("날짜", "공장", "공정", "신규분류요약", "제품코드", "실적수량", "필요수량", "부족수량"),
+            )
+            process_daily = _ensure_date_column(process_daily, src_col="날짜", out_col="날짜_date")
+            process_detail = _ensure_date_column(process_detail, src_col="날짜", out_col="날짜_date")
+            process_has_sheet = len(process_daily) > 0
+            process_detail_has_sheet = len(process_detail) > 0
+            # 기존 계산 함수는 엑셀 로더에 묶여 있어, store 모드에서는 화면에서 직접 사용하는 부분만 최소 집계로 대체합니다.
+            process_proc_base = pd.DataFrame()
+            process_det_base = pd.DataFrame()
 
     # 필터 적용 (기간 범위)
     daily_summary_filtered = daily_summary[
