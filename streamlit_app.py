@@ -1489,6 +1489,10 @@ def list_store_months(store_dir_str: str, table: str) -> tuple[str, ...]:
     return tuple(months)
 
 
+def _has_month(months: tuple[str, ...], ym: str) -> bool:
+    return ym in set(months or ())
+
+
 @st.cache_data(show_spinner=False)
 def load_store_table(
     store_dir_str: str,
@@ -1789,8 +1793,15 @@ try:
     st.sidebar.markdown("### 데이터 소스")
     _default_store_dir = _store_dir_from_user_input(base_dir=base_dir)
     store_dir_str = st.sidebar.text_input("Parquet store 경로", value=str(_default_store_dir))
-    store_dir = Path(store_dir_str) if store_dir_str else _default_store_dir
+    _store_dir_input = Path(store_dir_str) if store_dir_str else _default_store_dir
+    if (store_dir_str.strip() != str(_default_store_dir)) and (not _store_dir_input.exists()):
+        st.sidebar.warning("입력한 store 경로가 존재하지 않아 기본 경로로 대체합니다.")
+        store_dir = _default_store_dir
+    else:
+        store_dir = _store_dir_input
+
     store_available = _store_has_table(store_dir, "result1_daily")
+    st.sidebar.caption(f"store 사용 경로: {store_dir}")
     use_store = st.sidebar.toggle("Parquet(store) 사용(추천)", value=store_available, disabled=not store_available)
     if st.sidebar.button("캐시 비우기"):
         st.cache_data.clear()
@@ -1976,6 +1987,7 @@ try:
     first_day_current = current_month_start
     last_day_prev = first_day_current - pd.Timedelta(days=1)
     prev_month_start = datetime(last_day_prev.year, last_day_prev.month, 1).date()
+    prev_month_ym = f"{last_day_prev.year:04d}-{last_day_prev.month:02d}"
 
     # 전체 기간(데이터 기준) 계산 (기간조회 범위 제한용)
     full_min_date = daily_summary[daily_summary["날짜_date"] != today]["날짜_date"].min()
@@ -1995,6 +2007,11 @@ try:
         start_date = current_month_start
         end_date = current_month_end
     elif filter_option == "전월":
+        # store 모드에서 전월 parquet가 없으면 0으로 보이는 혼란을 방지
+        if use_store:
+            _months_avail = list_store_months(str(store_dir), "result1_daily")
+            if not _has_month(_months_avail, prev_month_ym):
+                st.warning(f"전월({prev_month_ym}) 데이터가 store에 없습니다. 전처리에서 해당 기간을 생성 후 푸시해주세요.")
         start_date = prev_month_start
         end_date = last_day_prev
     else:  # 기간조회
