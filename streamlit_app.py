@@ -9,6 +9,7 @@ import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 import io
+import json
 from xlsxwriter.utility import xl_rowcol_to_cell
 import textwrap
 
@@ -1457,6 +1458,80 @@ def load_result_excels(
     return matching_result, daily_summary, factory_summary, sku_daily_all, sku_daily_factory
 
 
+def _months_between(start_d: date, end_d: date) -> tuple[str, ...]:
+    if start_d is None or end_d is None:
+        return tuple()
+    if end_d < start_d:
+        start_d, end_d = end_d, start_d
+    periods = pd.period_range(start=start_d, end=end_d, freq="M")
+    return tuple(str(p) for p in periods)
+
+
+def _store_dir_from_user_input(*, base_dir: Path) -> Path:
+    env = os.environ.get("APS_YIELD_STORE_PATH", "").strip()
+    if env:
+        return Path(env)
+    return base_dir / "outputs" / "store"
+
+
+def _store_has_table(store_dir: Path, table: str) -> bool:
+    tdir = store_dir / table
+    return tdir.exists() and tdir.is_dir() and any(tdir.glob("*.parquet"))
+
+
+@st.cache_data(show_spinner=False)
+def list_store_months(store_dir_str: str, table: str) -> tuple[str, ...]:
+    store_dir = Path(store_dir_str)
+    tdir = store_dir / table
+    if not tdir.exists():
+        return tuple()
+    months = sorted([p.stem for p in tdir.glob("*.parquet") if p.is_file()])
+    return tuple(months)
+
+
+@st.cache_data(show_spinner=False)
+def load_store_table(store_dir_str: str, table: str, months: tuple[str, ...]) -> pd.DataFrame:
+    store_dir = Path(store_dir_str)
+    tdir = store_dir / table
+    if not tdir.exists():
+        return pd.DataFrame()
+
+    frames: list[pd.DataFrame] = []
+    for ym in months:
+        p = tdir / f"{ym}.parquet"
+        if not p.exists():
+            continue
+        try:
+            frames.append(pd.read_parquet(p))
+        except Exception:
+            continue
+
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def _ensure_date_column(df: pd.DataFrame, *, src_col: str, out_col: str) -> pd.DataFrame:
+    if df is None or len(df) == 0:
+        return df if df is not None else pd.DataFrame()
+    if out_col in df.columns:
+        return df
+    if src_col not in df.columns:
+        return df
+    df = df.copy()
+    df[src_col] = pd.to_datetime(df[src_col], errors="coerce")
+    df[out_col] = df[src_col].dt.date
+    return df
+
+
+def _normalize_spec_cols(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or len(df) == 0:
+        return df if df is not None else pd.DataFrame()
+    df = df.copy()
+    # 전처리 산출(부족대응SKU수)을 대시보드 기대(필요대응SKU수)로 호환
+    if "필요대응SKU수" not in df.columns and "부족대응SKU수" in df.columns:
+        df["필요대응SKU수"] = df["부족대응SKU수"]
+    return df
+
+
 @st.cache_data(show_spinner=False)
 def load_process_balance_excels(
     result_paths: tuple[str, ...],
@@ -1679,92 +1754,164 @@ def _truncate_err_message(msg: str, *, max_chars: int = 600) -> str:
     return textwrap.shorten(msg, width=max_chars, placeholder=" …(truncated)")
 
 
+def _safe_dataframe(
+    df: pd.DataFrame,
+    *,
+    fmt: dict[str, str] | None = None,
+    max_style_rows: int = 2000,
+    height: int | None = None,
+    hide_index: bool = True,
+) -> None:
+    if df is None:
+        st.dataframe(pd.DataFrame(), use_container_width=True, hide_index=hide_index, height=height)
+        return
+    if fmt and len(df) <= max_style_rows:
+        st.dataframe(df.style.format(fmt), use_container_width=True, hide_index=hide_index, height=height)
+        return
+    if fmt and len(df) > max_style_rows:
+        st.caption(f"표시 행이 많아({len(df):,}행) 스타일링을 생략하고 표시합니다.")
+    st.dataframe(df, use_container_width=True, hide_index=hide_index, height=height)
+
+
 # 결과 파일 선택(월별 분리 저장 지원)
 try:
     BASE_PATH = os.path.dirname(os.path.abspath(__file__))
     base_dir = Path(BASE_PATH)
 
+    st.sidebar.markdown("### 데이터 소스")
+    _default_store_dir = _store_dir_from_user_input(base_dir=base_dir)
+    store_dir_str = st.sidebar.text_input("Parquet store 경로", value=str(_default_store_dir))
+    store_dir = Path(store_dir_str) if store_dir_str else _default_store_dir
+    store_available = _store_has_table(store_dir, "result1_daily")
+    use_store = st.sidebar.toggle("Parquet(store) 사용(추천)", value=store_available, disabled=not store_available)
+
     # 결과 파일이 repo 루트뿐 아니라 `outputs/` 아래에 저장되는 경우도 있어 함께 검색합니다.
     search_dirs = [base_dir, base_dir / "outputs", base_dir / "outputs" / "archive"]
-    _cands: list[Path] = []
-    for d in search_dirs:
-        if not d.exists():
-            continue
-        _cands.extend(
-            [
-                p
-                for p in d.glob("유효생산량_결과*.xlsx")
-                if (not p.name.startswith("~$")) and (not p.name.startswith("유효생산량_결과2"))
-            ]
+
+    if use_store:
+        # result1은 Parquet(store)로만 로드(엑셀 로드는 생략)
+        result_candidates = []
+
+        # 공정 밸런스용 결과2 파일(전공정)은 기존 엑셀도 지원(호환 목적)
+        _cands2: list[Path] = []
+        for d in search_dirs:
+            if not d.exists():
+                continue
+            _cands2.extend([p for p in d.glob("유효생산량_결과2*.xlsx") if not p.name.startswith("~$")])
+
+        _seen2: set[str] = set()
+        result2_candidates = []
+        for p in _cands2:
+            rp = str(p.resolve())
+            if rp in _seen2:
+                continue
+            _seen2.add(rp)
+            result2_candidates.append(p)
+
+        result2_candidates = sorted(
+            result2_candidates,
+            key=lambda p: p.stat().st_mtime_ns if p.exists() else 0,
+            reverse=True,
         )
+    else:
+        _cands: list[Path] = []
+        for d in search_dirs:
+            if not d.exists():
+                continue
+            _cands.extend(
+                [
+                    p
+                    for p in d.glob("유효생산량_결과*.xlsx")
+                    if (not p.name.startswith("~$")) and (not p.name.startswith("유효생산량_결과2"))
+                ]
+            )
 
-    _seen: set[str] = set()
-    result_candidates: list[Path] = []
-    for p in _cands:
-        rp = str(p.resolve())
-        if rp in _seen:
-            continue
-        _seen.add(rp)
-        result_candidates.append(p)
+        _seen: set[str] = set()
+        result_candidates = []
+        for p in _cands:
+            rp = str(p.resolve())
+            if rp in _seen:
+                continue
+            _seen.add(rp)
+            result_candidates.append(p)
 
-    result_candidates = sorted(
-        result_candidates,
-        key=lambda p: p.stat().st_mtime_ns if p.exists() else 0,
-        reverse=True,
-    )
-    if not result_candidates:
-        st.error(
-            "⚠️ 결과 파일을 찾을 수 없습니다. 검색 경로: "
-            + ", ".join(str(d) for d in search_dirs)
+        result_candidates = sorted(
+            result_candidates,
+            key=lambda p: p.stat().st_mtime_ns if p.exists() else 0,
+            reverse=True,
         )
-        st.info("전처리 완료된 결과 파일(`유효생산량_결과*.xlsx`)을 repo 루트 또는 `outputs/`에 넣어주세요.")
-        st.stop()
+        if not result_candidates:
+            st.error(
+                "⚠️ 결과 파일을 찾을 수 없습니다. 검색 경로: "
+                + ", ".join(str(d) for d in search_dirs)
+            )
+            st.info("전처리 완료된 결과 파일(`유효생산량_결과*.xlsx`)을 repo 루트 또는 `outputs/`에 넣어주세요.")
+            st.stop()
 
-    # 공정 밸런스용 결과2 파일(전공정) 후보 검색
-    _cands2: list[Path] = []
-    for d in search_dirs:
-        if not d.exists():
-            continue
-        _cands2.extend([p for p in d.glob("유효생산량_결과2*.xlsx") if not p.name.startswith("~$")])
+        # 공정 밸런스용 결과2 파일(전공정) 후보 검색
+        _cands2: list[Path] = []
+        for d in search_dirs:
+            if not d.exists():
+                continue
+            _cands2.extend([p for p in d.glob("유효생산량_결과2*.xlsx") if not p.name.startswith("~$")])
 
-    _seen2: set[str] = set()
-    result2_candidates: list[Path] = []
-    for p in _cands2:
-        rp = str(p.resolve())
-        if rp in _seen2:
-            continue
-        _seen2.add(rp)
-        result2_candidates.append(p)
+        _seen2: set[str] = set()
+        result2_candidates = []
+        for p in _cands2:
+            rp = str(p.resolve())
+            if rp in _seen2:
+                continue
+            _seen2.add(rp)
+            result2_candidates.append(p)
 
-    result2_candidates = sorted(
-        result2_candidates,
-        key=lambda p: p.stat().st_mtime_ns if p.exists() else 0,
-        reverse=True,
-    )
+        result2_candidates = sorted(
+            result2_candidates,
+            key=lambda p: p.stat().st_mtime_ns if p.exists() else 0,
+            reverse=True,
+        )
 except Exception as e:
     st.error("❌ 초기화(파일 검색) 중 오류가 발생했습니다.")
     st.code(_truncate_err_message(str(e)), language="text")
     st.stop()
 
 try:
-    # 최신 파일이 월별로 분리되어 저장될 수 있어, 후보 파일들을 합쳐서 사용
-    result_paths = tuple(str(p) for p in result_candidates)
-    mtime_nss = tuple(int(p.stat().st_mtime_ns) for p in result_candidates)
-    matching_result, daily_summary, factory_summary, sku_daily_all, sku_daily_factory = load_result_excels(result_paths, mtime_nss)
+    if use_store:
+        _store_dir_str = str(store_dir)
+        _months_all = list_store_months(_store_dir_str, "result1_daily")
+        daily_summary = load_store_table(_store_dir_str, "result1_daily", _months_all)
+        daily_summary = _ensure_date_column(daily_summary, src_col="날짜", out_col="날짜_date")
 
-    # 공정 밸런스: 결과2 로드(없으면 빈 DF)
-    process_daily = pd.DataFrame()
-    process_has_sheet = False
-    process_detail = pd.DataFrame()
-    process_detail_has_sheet = False
-    process_proc_base = pd.DataFrame()
-    process_det_base = pd.DataFrame()
-    if result2_candidates:
-        result2_paths = tuple(str(p) for p in result2_candidates)
-        mtime2_nss = tuple(int(p.stat().st_mtime_ns) for p in result2_candidates)
-        process_daily, process_has_sheet = load_process_balance_excels(result2_paths, mtime2_nss)
-        process_detail, process_detail_has_sheet = load_process_balance_detail_excels(result2_paths, mtime2_nss)
-        process_proc_base, process_det_base, _ = load_process_balance_prepared(result2_paths, mtime2_nss)
+        matching_result = pd.DataFrame()
+        factory_summary = pd.DataFrame()
+        sku_daily_all = pd.DataFrame()
+        sku_daily_factory = pd.DataFrame()
+
+        # 공정 밸런스(전공정): 기간 선택 후 필요한 월만 로드(초기에는 빈 DF)
+        process_daily = pd.DataFrame()
+        process_has_sheet = False
+        process_detail = pd.DataFrame()
+        process_detail_has_sheet = False
+        process_proc_base = pd.DataFrame()
+        process_det_base = pd.DataFrame()
+    else:
+        # 최신 파일이 월별로 분리되어 저장될 수 있어, 후보 파일들을 합쳐서 사용
+        result_paths = tuple(str(p) for p in result_candidates)
+        mtime_nss = tuple(int(p.stat().st_mtime_ns) for p in result_candidates)
+        matching_result, daily_summary, factory_summary, sku_daily_all, sku_daily_factory = load_result_excels(result_paths, mtime_nss)
+
+        # 공정 밸런스: 결과2 로드(없으면 빈 DF)
+        process_daily = pd.DataFrame()
+        process_has_sheet = False
+        process_detail = pd.DataFrame()
+        process_detail_has_sheet = False
+        process_proc_base = pd.DataFrame()
+        process_det_base = pd.DataFrame()
+        if result2_candidates:
+            result2_paths = tuple(str(p) for p in result2_candidates)
+            mtime2_nss = tuple(int(p.stat().st_mtime_ns) for p in result2_candidates)
+            process_daily, process_has_sheet = load_process_balance_excels(result2_paths, mtime2_nss)
+            process_detail, process_detail_has_sheet = load_process_balance_detail_excels(result2_paths, mtime2_nss)
+            process_proc_base, process_det_base, _ = load_process_balance_prepared(result2_paths, mtime2_nss)
 
     # 금일 데이터 제외 (아직 생산 중이므로) - KST 기준
     now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
@@ -1896,6 +2043,30 @@ try:
                 start_date = end_date
 
     st.markdown("<div style='height:30px'></div>", unsafe_allow_html=True)
+
+    # Parquet(store) 모드: 기간 선택 후 해당 월 데이터만 로드(메모리/속도 안정화)
+    if use_store:
+        _store_dir_str = str(store_dir)
+        _months_in_range = _months_between(start_date, end_date)
+
+        matching_result = load_store_table(_store_dir_str, "result1_matching", _months_in_range)
+        factory_summary = load_store_table(_store_dir_str, "result1_factory", _months_in_range)
+        sku_daily_all = _normalize_spec_cols(load_store_table(_store_dir_str, "result1_spec_daily", _months_in_range))
+        sku_daily_factory = _normalize_spec_cols(load_store_table(_store_dir_str, "result1_spec_factory_daily", _months_in_range))
+
+        matching_result = _ensure_date_column(matching_result, src_col="날짜", out_col="날짜_date")
+        matching_result = _ensure_date_column(matching_result, src_col="생산일자", out_col="생산일자_date")
+        factory_summary = _ensure_date_column(factory_summary, src_col="생산일자", out_col="생산일자_date")
+        sku_daily_all = _ensure_date_column(sku_daily_all, src_col="날짜", out_col="날짜_date")
+        sku_daily_factory = _ensure_date_column(sku_daily_factory, src_col="날짜", out_col="날짜_date")
+
+        # 공정 밸런스(전공정): 기존 엑셀 결과2도 함께 지원(Parquet 전환 전까지 호환)
+        if main_tab == "공정 밸런스" and result2_candidates:
+            result2_paths = tuple(str(p) for p in result2_candidates)
+            mtime2_nss = tuple(int(p.stat().st_mtime_ns) for p in result2_candidates)
+            process_daily, process_has_sheet = load_process_balance_excels(result2_paths, mtime2_nss)
+            process_detail, process_detail_has_sheet = load_process_balance_detail_excels(result2_paths, mtime2_nss)
+            process_proc_base, process_det_base, _ = load_process_balance_prepared(result2_paths, mtime2_nss)
 
     # 필터 적용 (기간 범위)
     daily_summary_filtered = daily_summary[
@@ -2514,18 +2685,15 @@ try:
         )
         daily_display = daily_display[daily_cols].copy()
 
-        st.dataframe(
-            daily_display.style.format(
-                {
-                    **{f"{KPI_LABEL_MAP.get(c, c)} (pcs)": "{:,.0f}" for c in pcs_cols},
-                    **({"규격 대응률(%)": "{:.1f}%"} if "규격 대응률(%)" in daily_display.columns else {}),
-                    RATE_LABEL_MAP["유효비율(%)"]: "{:.1f}%",
-                    RATE_LABEL_MAP["과생산비율(%)"]: "{:.1f}%",
-                    RATE_LABEL_MAP["불필요비율(%)"]: "{:.1f}%",
-                }
-            ),
-            use_container_width=True,
-            hide_index=True,
+        _safe_dataframe(
+            daily_display,
+            fmt={
+                **{f"{KPI_LABEL_MAP.get(c, c)} (pcs)": "{:,.0f}" for c in pcs_cols},
+                **({"규격 대응률(%)": "{:.1f}%"} if "규격 대응률(%)" in daily_display.columns else {}),
+                RATE_LABEL_MAP["유효비율(%)"]: "{:.1f}%",
+                RATE_LABEL_MAP["과생산비율(%)"]: "{:.1f}%",
+                RATE_LABEL_MAP["불필요비율(%)"]: "{:.1f}%",
+            },
         )
 
         with st.expander("🔎 관별(공장별) 일별 상세 펼치기", expanded=False):
@@ -2620,8 +2788,9 @@ try:
                 )
                 factory_daily_display = factory_daily_display[factory_daily_cols].copy()
 
-                st.dataframe(
-                    factory_daily_display.style.format({
+                _safe_dataframe(
+                    factory_daily_display,
+                    fmt={
                         f"{KPI_LABEL_MAP['총실적']} (pcs)": "{:,.0f}",
                         factory_need_label: "{:,.0f}",
                         f"{KPI_LABEL_MAP['유효생산량']} (pcs)": "{:,.0f}",
@@ -2631,9 +2800,7 @@ try:
                         RATE_LABEL_MAP["유효비율(%)"]: "{:.1f}%",
                         RATE_LABEL_MAP["과생산비율(%)"]: "{:.1f}%",
                         RATE_LABEL_MAP["불필요비율(%)"]: "{:.1f}%",
-                    }),
-                    use_container_width=True,
-                    hide_index=True,
+                    },
                 )
 
         # ============== 자료 다운로드 ==============

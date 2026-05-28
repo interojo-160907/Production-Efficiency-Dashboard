@@ -4,3 +4,4 @@ openpyxl
 XlsxWriter
 plotly
 numpy
+pyarrow
