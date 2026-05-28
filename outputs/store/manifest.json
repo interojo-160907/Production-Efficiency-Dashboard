@@ -1,0 +1,38 @@
+{
+  "updated_at": "2026-05-28T12:15:23",
+  "months_refreshed": [
+    "2026-05"
+  ],
+  "tables": {
+    "result1_daily": [
+      "2026-05"
+    ],
+    "result1_factory": [
+      "2026-05"
+    ],
+    "result1_matching": [
+      "2026-05"
+    ],
+    "result1_spec_daily": [
+      "2026-05"
+    ],
+    "result1_spec_factory_class_daily": [
+      "2026-05"
+    ],
+    "result1_spec_factory_daily": [
+      "2026-05"
+    ],
+    "result2_daily": [
+      "2026-05"
+    ],
+    "result2_factory": [
+      "2026-05"
+    ],
+    "result2_matching": [
+      "2026-05"
+    ],
+    "result2_process_daily": [
+      "2026-05"
+    ]
+  }
+}
