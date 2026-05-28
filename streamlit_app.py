@@ -2074,12 +2074,14 @@ try:
         factory_summary = load_store_table(_store_dir_str, "result1_factory", _months_in_range)
         sku_daily_all = _normalize_spec_cols(load_store_table(_store_dir_str, "result1_spec_daily", _months_in_range))
         sku_daily_factory = _normalize_spec_cols(load_store_table(_store_dir_str, "result1_spec_factory_daily", _months_in_range))
+        sku_daily_factory_class = _normalize_spec_cols(load_store_table(_store_dir_str, "result1_spec_factory_class_daily", _months_in_range))
 
         matching_result = _ensure_date_column(matching_result, src_col="날짜", out_col="날짜_date")
         matching_result = _ensure_date_column(matching_result, src_col="생산일자", out_col="생산일자_date")
         factory_summary = _ensure_date_column(factory_summary, src_col="생산일자", out_col="생산일자_date")
         sku_daily_all = _ensure_date_column(sku_daily_all, src_col="날짜", out_col="날짜_date")
         sku_daily_factory = _ensure_date_column(sku_daily_factory, src_col="날짜", out_col="날짜_date")
+        sku_daily_factory_class = _ensure_date_column(sku_daily_factory_class, src_col="날짜", out_col="날짜_date")
 
         # 공정 밸런스(전공정): store 우선 사용(엑셀 로드로 인한 메모리 폭증 방지)
         if main_tab == "공정 밸런스":
@@ -2474,8 +2476,32 @@ try:
                 if not sku_coverage_available:
                     st.info("공장별 SKU 집계가 불가합니다: `매칭결과` 시트에 `공장` 컬럼이 필요합니다.")
                 else:
-                    if matching_result is None or len(matching_result) == 0 or not {"공장", "신규분류요약", "제품코드", "양품수량", "부족수량", "유효생산량", "날짜_date"}.issubset(set(matching_result.columns)):
-                        st.info("신규분류 기준 SKU 상세 집계를 위해 `매칭결과`에 `공장/신규분류요약/제품코드/수량/날짜` 컬럼이 필요합니다.")
+                    # 1) 전처리 산출(공장별_일별_신규분류SKU)이 있으면 그걸 우선 사용(가벼움)
+                    if "sku_daily_factory_class" in globals() and sku_daily_factory_class is not None and len(sku_daily_factory_class) > 0:
+                        src = sku_daily_factory_class[
+                            (sku_daily_factory_class["날짜_date"] >= start_date) &
+                            (sku_daily_factory_class["날짜_date"] <= end_date) &
+                            (sku_daily_factory_class["날짜_date"] != today)
+                        ].copy()
+                        if len(src) == 0:
+                            st.info("선택한 기간에 신규분류 기준 SKU 집계 데이터가 없습니다.")
+                        else:
+                            for col in ["생산SKU수", "필요대응SKU수"]:
+                                if col in src.columns:
+                                    src[col] = pd.to_numeric(src[col], errors="coerce").fillna(0)
+                            sku_counts = src.groupby(["공장", "신규분류요약"], dropna=False)[["생산SKU수", "필요대응SKU수"]].sum().reset_index()
+                            sku_counts["규격대응률(%)"] = np.where(
+                                sku_counts["생산SKU수"] > 0,
+                                sku_counts["필요대응SKU수"] / sku_counts["생산SKU수"] * 100,
+                                0,
+                            )
+                            sku_counts["규격대응률(%)"] = sku_counts["규격대응률(%)"].clip(0, 100)
+                            factory_order = {"A관(1공장)": 1, "C관(2공장)": 2, "S관(3공장)": 3}
+                            sku_counts["_factory_sort"] = sku_counts["공장"].map(factory_order)
+                            sku_counts = sku_counts.sort_values(["_factory_sort", "신규분류요약"]).reset_index(drop=True).drop("_factory_sort", axis=1)
+                    # 2) 없으면 기존 방식(매칭결과로 계산)
+                    elif matching_result is None or len(matching_result) == 0 or not {"공장", "신규분류요약", "제품코드", "양품수량", "부족수량", "유효생산량", "날짜_date"}.issubset(set(matching_result.columns)):
+                        st.info("신규분류 기준 SKU 상세 집계를 위해 전처리 산출물(공장별_일별_신규분류SKU) 또는 `매칭결과`가 필요합니다.")
                     else:
                         mf2 = matching_result[
                             (matching_result["날짜_date"] >= start_date) &
