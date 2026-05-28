@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-28T12:15:23",
+  "updated_at": "2026-05-28T14:35:45",
   "months_refreshed": [
     "2026-05"
   ],
@@ -25,6 +25,9 @@
     "result2_daily": [
       "2026-05"
     ],
+    "result2_det_base": [
+      "2026-05"
+    ],
     "result2_factory": [
       "2026-05"
     ],
@@ -32,6 +35,9 @@
       "2026-05"
     ],
     "result2_process_daily": [
+      "2026-05"
+    ],
+    "result2_proc_base": [
       "2026-05"
     ]
   }
