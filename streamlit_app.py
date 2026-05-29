@@ -1132,6 +1132,19 @@ RATE_LABEL_MAP = {
 
 st.set_page_config(page_title=DASHBOARD_TITLE, layout="wide", initial_sidebar_state="collapsed")
 
+# 운영 화면에서는 사이드바가 불필요한 경우가 많아 숨김 옵션을 제공합니다.
+# - APS_HIDE_SIDEBAR=1 이면 사이드바 자체를 화면에서 제거합니다.
+HIDE_SIDEBAR = os.environ.get("APS_HIDE_SIDEBAR", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
+if HIDE_SIDEBAR:
+    st.markdown(
+        """
+<style>
+  [data-testid="stSidebar"], [data-testid="stSidebarNav"] { display: none !important; }
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
 # CSS 스타일링
 st.markdown("""
 <style>
@@ -1479,10 +1492,39 @@ def _store_has_table(store_dir: Path, table: str) -> bool:
     return tdir.exists() and tdir.is_dir() and any(tdir.glob("*.parquet"))
 
 
+def _store_table_dir_state_ns(store_dir: Path, table: str) -> int:
+    """Parquet 디렉토리 상태값(캐시 무효화용).
+
+    - 파일 추가/교체가 발생하면 값이 바뀌도록, *.parquet의 max(mtime_ns)를 사용합니다.
+    """
+    try:
+        tdir = store_dir / table
+        if not tdir.exists():
+            return 0
+        mtimes = [int(p.stat().st_mtime_ns) for p in tdir.glob("*.parquet") if p.is_file()]
+        return max(mtimes) if mtimes else 0
+    except Exception:
+        return 0
+
+
+def _store_table_mtime_nss(store_dir: Path, table: str, months: tuple[str, ...]) -> tuple[int, ...]:
+    """선택된 월(파일명)별 mtime_ns 튜플(캐시 무효화용)."""
+    tdir = store_dir / table
+    out: list[int] = []
+    for ym in months or ():
+        p = tdir / f"{ym}.parquet"
+        try:
+            out.append(int(p.stat().st_mtime_ns) if p.exists() else 0)
+        except Exception:
+            out.append(0)
+    return tuple(out)
+
+
 @st.cache_data(show_spinner=False)
-def list_store_months(store_dir_str: str, table: str) -> tuple[str, ...]:
+def list_store_months(store_dir_str: str, table: str, dir_state_ns: int) -> tuple[str, ...]:
     store_dir = Path(store_dir_str)
     tdir = store_dir / table
+    _ = dir_state_ns  # cache key only (파일 추가/교체 시 무효화)
     if not tdir.exists():
         return tuple()
     months = sorted([p.stem for p in tdir.glob("*.parquet") if p.is_file()])
@@ -1498,10 +1540,12 @@ def load_store_table(
     store_dir_str: str,
     table: str,
     months: tuple[str, ...],
+    mtime_nss: tuple[int, ...],
     columns: tuple[str, ...] | None = None,
 ) -> pd.DataFrame:
     store_dir = Path(store_dir_str)
     tdir = store_dir / table
+    _ = mtime_nss  # cache key only (파일 교체 시 무효화)
     if not tdir.exists():
         return pd.DataFrame()
 
@@ -1790,25 +1834,26 @@ try:
     BASE_PATH = os.path.dirname(os.path.abspath(__file__))
     base_dir = Path(BASE_PATH)
 
-    st.sidebar.markdown("### 데이터 소스")
+    ui = st if HIDE_SIDEBAR else st.sidebar
+    ui.markdown("### 데이터 소스")
     _default_store_dir = _store_dir_from_user_input(base_dir=base_dir)
-    store_dir_str = st.sidebar.text_input("Parquet store 경로", value=str(_default_store_dir))
+    store_dir_str = ui.text_input("Parquet store 경로", value=str(_default_store_dir))
     _store_dir_input = Path(store_dir_str) if store_dir_str else _default_store_dir
     if (store_dir_str.strip() != str(_default_store_dir)) and (not _store_dir_input.exists()):
-        st.sidebar.warning("입력한 store 경로가 존재하지 않아 기본 경로로 대체합니다.")
+        ui.warning("입력한 store 경로가 존재하지 않아 기본 경로로 대체합니다.")
         store_dir = _default_store_dir
     else:
         store_dir = _store_dir_input
 
     store_available = _store_has_table(store_dir, "result1_daily")
-    st.sidebar.caption(f"store 사용 경로: {store_dir}")
-    use_store = st.sidebar.toggle("Parquet(store) 사용(추천)", value=store_available, disabled=not store_available)
-    if st.sidebar.button("캐시 비우기"):
+    ui.caption(f"store 사용 경로: {store_dir}")
+    use_store = ui.toggle("Parquet(store) 사용(추천)", value=store_available, disabled=not store_available)
+    if ui.button("캐시 비우기"):
         st.cache_data.clear()
         st.cache_resource.clear()
-        st.sidebar.success("캐시를 비웠습니다. 새로고침하세요.")
+        ui.success("캐시를 비웠습니다. 새로고침하세요.")
 
-    with st.sidebar.expander("store 상태(월 파티션)", expanded=False):
+    with ui.expander("store 상태(월 파티션)", expanded=False):
         manifest_path = store_dir / "manifest.json"
         if manifest_path.exists():
             try:
@@ -1922,8 +1967,14 @@ except Exception as e:
 try:
     if use_store:
         _store_dir_str = str(store_dir)
-        _months_all = list_store_months(_store_dir_str, "result1_daily")
-        daily_summary = load_store_table(_store_dir_str, "result1_daily", _months_all)
+        _daily_dir_state = _store_table_dir_state_ns(store_dir, "result1_daily")
+        _months_all = list_store_months(_store_dir_str, "result1_daily", _daily_dir_state)
+        daily_summary = load_store_table(
+            _store_dir_str,
+            "result1_daily",
+            _months_all,
+            _store_table_mtime_nss(store_dir, "result1_daily", _months_all),
+        )
         daily_summary = _ensure_date_column(daily_summary, src_col="날짜", out_col="날짜_date")
 
         matching_result = pd.DataFrame()
@@ -2031,7 +2082,11 @@ try:
     elif filter_option == "전월":
         # store 모드에서 전월 parquet가 없으면 0으로 보이는 혼란을 방지
         if use_store:
-            _months_avail = list_store_months(str(store_dir), "result1_daily")
+            _months_avail = list_store_months(
+                str(store_dir),
+                "result1_daily",
+                _store_table_dir_state_ns(store_dir, "result1_daily"),
+            )
             if not _has_month(_months_avail, prev_month_ym):
                 st.warning(
                     f"전월({prev_month_ym}) 데이터가 store에 없습니다. "
@@ -2106,13 +2161,14 @@ try:
 
         # 대용량(매칭결과)은 기본 미로드. 필요한 화면/기능에서만 사용하도록 옵션 제공.
         detail_available = _store_has_table(store_dir, "result1_matching")
-        load_detail = st.sidebar.toggle(
+        _detail_ui = st if HIDE_SIDEBAR else st.sidebar
+        load_detail = _detail_ui.toggle(
             "상세(매칭결과) 로드",
             value=False,
             disabled=not detail_available,
         )
         if not detail_available:
-            st.sidebar.caption("상세는 저장되지 않았습니다(WRITE_DETAIL_STORE=0).")
+            _detail_ui.caption("상세는 저장되지 않았습니다(WRITE_DETAIL_STORE=0).")
 
         matching_result = pd.DataFrame()
         if load_detail:
@@ -2120,14 +2176,41 @@ try:
                 _store_dir_str,
                 "result1_matching",
                 _months_in_range,
+                _store_table_mtime_nss(store_dir, "result1_matching", _months_in_range),
                 # 컬럼을 제한하면 메모리가 크게 줄어듭니다.
                 columns=("날짜", "생산일자", "공장", "신규분류요약", "제품코드", "양품수량", "부족수량"),
             )
 
-        factory_summary = load_store_table(_store_dir_str, "result1_factory", _months_in_range)
-        sku_daily_all = _normalize_spec_cols(load_store_table(_store_dir_str, "result1_spec_daily", _months_in_range))
-        sku_daily_factory = _normalize_spec_cols(load_store_table(_store_dir_str, "result1_spec_factory_daily", _months_in_range))
-        sku_daily_factory_class = _normalize_spec_cols(load_store_table(_store_dir_str, "result1_spec_factory_class_daily", _months_in_range))
+        factory_summary = load_store_table(
+            _store_dir_str,
+            "result1_factory",
+            _months_in_range,
+            _store_table_mtime_nss(store_dir, "result1_factory", _months_in_range),
+        )
+        sku_daily_all = _normalize_spec_cols(
+            load_store_table(
+                _store_dir_str,
+                "result1_spec_daily",
+                _months_in_range,
+                _store_table_mtime_nss(store_dir, "result1_spec_daily", _months_in_range),
+            )
+        )
+        sku_daily_factory = _normalize_spec_cols(
+            load_store_table(
+                _store_dir_str,
+                "result1_spec_factory_daily",
+                _months_in_range,
+                _store_table_mtime_nss(store_dir, "result1_spec_factory_daily", _months_in_range),
+            )
+        )
+        sku_daily_factory_class = _normalize_spec_cols(
+            load_store_table(
+                _store_dir_str,
+                "result1_spec_factory_class_daily",
+                _months_in_range,
+                _store_table_mtime_nss(store_dir, "result1_spec_factory_class_daily", _months_in_range),
+            )
+        )
 
         matching_result = _ensure_date_column(matching_result, src_col="날짜", out_col="날짜_date")
         matching_result = _ensure_date_column(matching_result, src_col="생산일자", out_col="생산일자_date")
@@ -2145,12 +2228,27 @@ try:
 
         # 공정 밸런스(전공정): store 우선 사용(엑셀 로드로 인한 메모리 폭증 방지)
         if main_tab == "공정 밸런스":
-            process_daily = load_store_table(_store_dir_str, "result2_process_daily", _months_in_range)
+            process_daily = load_store_table(
+                _store_dir_str,
+                "result2_process_daily",
+                _months_in_range,
+                _store_table_mtime_nss(store_dir, "result2_process_daily", _months_in_range),
+            )
             process_daily = _ensure_date_column(process_daily, src_col="날짜", out_col="날짜_date")
             process_has_sheet = len(process_daily) > 0
 
-            process_proc_base = load_store_table(_store_dir_str, "result2_proc_base", _months_in_range)
-            process_det_base = load_store_table(_store_dir_str, "result2_det_base", _months_in_range)
+            process_proc_base = load_store_table(
+                _store_dir_str,
+                "result2_proc_base",
+                _months_in_range,
+                _store_table_mtime_nss(store_dir, "result2_proc_base", _months_in_range),
+            )
+            process_det_base = load_store_table(
+                _store_dir_str,
+                "result2_det_base",
+                _months_in_range,
+                _store_table_mtime_nss(store_dir, "result2_det_base", _months_in_range),
+            )
             process_proc_base = _ensure_date_column(process_proc_base, src_col="날짜", out_col="날짜_date")
             process_det_base = _ensure_date_column(process_det_base, src_col="날짜", out_col="날짜_date")
             process_detail = pd.DataFrame()
