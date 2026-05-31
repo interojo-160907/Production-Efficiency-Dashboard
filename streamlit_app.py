@@ -2049,22 +2049,38 @@ try:
     # 기간 필터 (기본: 당월)
     filter_option = st.radio("조회 기간", ["당월", "전월", "기간조회"], horizontal=True, label_visibility="collapsed")
 
-    # 날짜 범위 계산
-    current_month_start = datetime(today.year, today.month, 1).date()
-    data_max_date = daily_summary["날짜_date"].max()
-    current_month_end = (today - pd.Timedelta(days=1))  # 어제까지 (date)
-    if pd.notna(data_max_date):
-        current_month_end = min(current_month_end, data_max_date)
+    # 전체 기간(데이터 기준) 계산 (기간조회 범위 제한용)
+    # - 오늘 데이터는 "집계 전/미완" 가능성이 있어 기본적으로 제외(전일까지 보여주는 대시보드 정책)
+    _dates_ex_today = daily_summary[daily_summary["날짜_date"] != today]["날짜_date"]
+    full_min_date = _dates_ex_today.min()
+    full_max_date = _dates_ex_today.max()
 
-    # 전월 계산
+    # 당월/전월 기준일: "오늘"이 아니라 "데이터 최신일(max)" 기준으로 월을 잡습니다.
+    # 예) 6/1에 최신 데이터가 5/31이면 당월=5월, 전월=4월
+    has_data_ref = pd.notna(full_max_date)
+    has_data_ref = pd.notna(full_max_date)
+    data_ref_date = None
+    if has_data_ref:
+        data_ref_date = full_max_date
+    else:
+        # 데이터가 비어있으면 최소한 전일을 기준으로 fallback
+        data_ref_date = (today - pd.Timedelta(days=1))
+    data_ref_date = pd.to_datetime(data_ref_date).date()
+
+    if has_data_ref:
+        st.caption(f"데이터 기준일: {data_ref_date} (전일까지 집계)")
+    else:
+        st.caption("데이터 기준일: 데이터 없음")
+
+    # 날짜 범위 계산 (데이터 기준일 기준)
+    current_month_start = datetime(data_ref_date.year, data_ref_date.month, 1).date()
+    current_month_end = data_ref_date
+
+    # 전월 계산 (데이터 기준일의 '당월' 직전 월)
     first_day_current = current_month_start
     last_day_prev = first_day_current - pd.Timedelta(days=1)
     prev_month_start = datetime(last_day_prev.year, last_day_prev.month, 1).date()
     prev_month_ym = f"{last_day_prev.year:04d}-{last_day_prev.month:02d}"
-
-    # 전체 기간(데이터 기준) 계산 (기간조회 범위 제한용)
-    full_min_date = daily_summary[daily_summary["날짜_date"] != today]["날짜_date"].min()
-    full_max_date = daily_summary[daily_summary["날짜_date"] != today]["날짜_date"].max()
 
     # 공정 밸런스는 결과2(매칭결과) 기준으로 가능한 최소일을 사용 (없으면 전체 기간과 동일)
     process_full_min_date = None
@@ -2136,7 +2152,7 @@ try:
             end_date = st.date_input("종료 날짜", value=_ss_end, min_value=min_date, max_value=max_date, key="range_end")
 
     if start_date > end_date:
-        st.warning("시작 날짜가 종료 날짜보다 커서 자동으로 교체했습니다.")
+        st.warning(f"시작 날짜({start_date})가 종료 날짜({end_date})보다 이후라서 두 값을 서로 바꿨습니다.")
         start_date, end_date = end_date, start_date
 
     # 공정 밸런스는 결과2에 존재하는 기간 내로 강제(공정 밸런스 최초일 이전 데이터는 신뢰 불가)
