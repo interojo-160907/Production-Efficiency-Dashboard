@@ -1,3 +1,11 @@
+# Prefer the published Control Tower snapshot; keep legacy mode only until initial publication.
+from pathlib import Path as _MirrorPath
+if (_MirrorPath(__file__).parent / "outputs/mirror/dashboard.sqlite").is_file():
+    import streamlit as _mirror_st
+    from mirror_app import run as _run_mirror
+    _run_mirror()
+    _mirror_st.stop()
+
 import os
 from pathlib import Path
 import calendar
