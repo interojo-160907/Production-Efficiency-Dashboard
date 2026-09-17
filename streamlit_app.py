@@ -12,6 +12,7 @@ import io
 import json
 from xlsxwriter.utility import xl_rowcol_to_cell
 import textwrap
+import mirror_adapter as _mirror
 
 
 # ====== Dashboard color system (global) ======
@@ -51,6 +52,8 @@ def grade_of(score: float) -> str:
         return "위험"
     if np.isnan(s):
         return "위험"
+    if _mirror.active():
+        return _mirror.grade(s)
     if s >= 70:
         return "양호"
     if s >= 65:
@@ -263,6 +266,10 @@ def build_balance_tables_for_export(proc: pd.DataFrame, det: pd.DataFrame) -> tu
         ["양호", "주의", "경고"],
         default="위험",
     )
+    if _mirror.active():
+        criteria = _mirror.profile(_mirror.revision())
+        summary["공정점수"] = [_mirror._score(*values, criteria) for values in summary[["규격대응률(%)", "정확대응비중(%)", "초과생산비중(%)", "비정형생산비중(%)"]].itertuples(index=False, name=None)]
+        summary["상태"] = summary["공정점수"].map(_mirror.grade)
     if "공장그룹" in summary.columns:
         summary["공장그룹"] = pd.Categorical(summary["공장그룹"], categories=factory_order + ["기타"], ordered=True)
     if "공정" in summary.columns:
@@ -1497,6 +1504,8 @@ def _months_between(start_d: date, end_d: date) -> tuple[str, ...]:
 
 
 def _store_dir_from_user_input(*, base_dir: Path) -> Path:
+    if _mirror.active():
+        return _mirror.DB.parent
     env = os.environ.get("APS_YIELD_STORE_PATH", "").strip()
     if env:
         return Path(env)
@@ -1504,11 +1513,15 @@ def _store_dir_from_user_input(*, base_dir: Path) -> Path:
 
 
 def _store_has_table(store_dir: Path, table: str) -> bool:
+    if _mirror.active(store_dir):
+        return table in _mirror.TABLES
     tdir = store_dir / table
     return tdir.exists() and tdir.is_dir() and any(tdir.glob("*.parquet"))
 
 
 def _store_table_dir_state_ns(store_dir: Path, table: str) -> int:
+    if _mirror.active(store_dir):
+        return _mirror.revision()
     """Parquet 디렉토리 상태값(캐시 무효화용).
 
     - 파일 추가/교체가 발생하면 값이 바뀌도록, *.parquet의 max(mtime_ns)를 사용합니다.
@@ -1524,6 +1537,8 @@ def _store_table_dir_state_ns(store_dir: Path, table: str) -> int:
 
 
 def _store_table_mtime_nss(store_dir: Path, table: str, months: tuple[str, ...]) -> tuple[int, ...]:
+    if _mirror.active(store_dir):
+        return tuple(_mirror.revision() for _ in months)
     """선택된 월(파일명)별 mtime_ns 튜플(캐시 무효화용)."""
     tdir = store_dir / table
     out: list[int] = []
@@ -1538,6 +1553,8 @@ def _store_table_mtime_nss(store_dir: Path, table: str, months: tuple[str, ...])
 
 @st.cache_data(show_spinner=False)
 def list_store_months(store_dir_str: str, table: str, dir_state_ns: int) -> tuple[str, ...]:
+    if _mirror.active(store_dir_str):
+        return _mirror.months(table)
     store_dir = Path(store_dir_str)
     tdir = store_dir / table
     _ = dir_state_ns  # cache key only (파일 추가/교체 시 무효화)
@@ -1559,6 +1576,8 @@ def load_store_table(
     mtime_nss: tuple[int, ...],
     columns: tuple[str, ...] | None = None,
 ) -> pd.DataFrame:
+    if _mirror.active(store_dir_str):
+        return _mirror.load(table, months, columns)
     store_dir = Path(store_dir_str)
     tdir = store_dir / table
     _ = mtime_nss  # cache key only (파일 교체 시 무효화)
@@ -1888,6 +1907,8 @@ try:
                     st.caption(f"- {k}: {', '.join(months)}")
             except Exception:
                 st.caption("manifest.json을 읽을 수 없습니다.")
+        elif _mirror.active(store_dir):
+            st.caption(f"컨트롤타워 게시 데이터 · 마지막 게시: {_mirror.published_at()}")
         else:
             st.caption("manifest.json이 없습니다. (store를 아직 생성/푸시하지 않았을 수 있습니다.)")
 
@@ -2028,7 +2049,7 @@ try:
     # 금일 데이터 제외 (아직 생산 중이므로) - KST 기준
     now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
     today = now_kst.date()
-    st.caption(f"기준 시각(KST): {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+    st.caption(f"마지막 게시 완료(KST): {_mirror.published_at()}" if _mirror.active(store_dir) else f"기준 시각(KST): {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
 
     # 필수 데이터 검증/정규화
     if daily_summary is None or len(daily_summary) == 0 or "날짜_date" not in daily_summary.columns:
@@ -2329,6 +2350,8 @@ try:
             need_responded_skus_total = float(pd.to_numeric(shortage_prod_daily["필요대응SKU수"], errors="coerce").fillna(0).sum())
             shortage_prod_rate = (need_responded_skus_total / produced_skus_total * 100) if produced_skus_total > 0 else None
 
+    display_valid, display_over, display_waste = (_mirror.balanced_percentages([valid_prod, over_prod, waste_prod]) if _mirror.active(store_dir) else [valid_rate, over_rate, waste_rate])
+
     if main_tab == "생산 운영 현황":
         colA, col3, col4, col5 = st.columns([2.6, 1.1, 1.1, 1.1])
         with colA:
@@ -2347,19 +2370,19 @@ try:
         with col3:
             render_kpi_card(
                 "정확 대응 비중",
-                f"<span style='color:#047857'>{valid_rate:.1f}%</span>",
+                f"<span style='color:#047857'>{display_valid:.1f}%</span>",
                 sub=f"수량: {valid_prod:,} pcs",
             )
         with col4:
             render_kpi_card(
                 "초과 생산 비중",
-                f"<span style='color:#b91c1c'>{over_rate:.1f}%</span>",
+                f"<span style='color:#b91c1c'>{display_over:.1f}%</span>",
                 sub=f"수량: {over_prod:,} pcs",
             )
         with col5:
             render_kpi_card(
                 "비정형 생산 비중",
-                f"<span style='color:#b45309'>{waste_rate:.1f}%</span>",
+                f"<span style='color:#b45309'>{display_waste:.1f}%</span>",
                 sub=f"수량: {waste_prod:,} pcs",
             )
 
@@ -3117,6 +3140,7 @@ try:
                 excel_key = "export_excel_bytes"
                 excel_sig_key = "export_excel_signature"
                 signature = (
+                        _mirror.revision() if _mirror.active(store_dir) else 0,
                     str(start_date),
                     str(end_date),
                     int(daily_summary_filtered["날짜_date"].nunique()) if "날짜_date" in daily_summary_filtered.columns else 0,
@@ -3163,9 +3187,9 @@ try:
                                     "line_ts_df": line_ts_df,
                                     "kpi_total_prod": total_prod,
                                     "kpi_spec_rate": shortage_prod_rate,
-                                    "kpi_valid": (valid_rate, valid_prod),
-                                    "kpi_over": (over_rate, over_prod),
-                                    "kpi_waste": (waste_rate, waste_prod),
+                                    "kpi_valid": (display_valid, valid_prod),
+                                    "kpi_over": (display_over, over_prod),
+                                    "kpi_waste": (display_waste, waste_prod),
                                     "filter_option": filter_option,
                                 }
 
@@ -3303,6 +3327,10 @@ try:
                     default="위험",
                 )
 
+                if _mirror.active(store_dir) and "_tower_score" in proc:
+                    proc["공정점수"] = proc["_tower_score"]
+                    proc["상태"] = proc["_tower_grade"]
+
                 # 집계(가중: 실적수량)
                 w = pd.to_numeric(proc.get("실적수량", 0), errors="coerce").fillna(0).clip(lower=0)
                 overall = float((proc["공정점수"] * w).sum() / w.sum()) if float(w.sum()) > 0 else float(proc["공정점수"].mean())
@@ -3321,7 +3349,7 @@ try:
                 proc_score_map = {str(r["공정"]): float(r["평균점수"]) for _, r in by_proc.iterrows()} if len(by_proc) else {}
 
                 proc_grades = [grade_of(float(proc_score_map.get(p, 0.0))) for p in target_order]
-                overall_status = majority_grade(proc_grades)
+                overall_status = _mirror.grade(overall) if _mirror.active(store_dir) else majority_grade(proc_grades)
                 overall_status_html = f"<span style='color:{grade_text_color(overall_status)}'>{overall_status}</span>"
 
                 k_cols = st.columns([1.25, 1, 1, 1, 1, 1])
@@ -3869,6 +3897,7 @@ try:
                     export_key = "balance_export_excel_bytes"
                     export_sig_key = "balance_export_excel_signature"
                     signature = (
+                        _mirror.revision() if _mirror.active(store_dir) else 0,
                         str(start_date),
                         str(end_date),
                         int(len(proc)),
