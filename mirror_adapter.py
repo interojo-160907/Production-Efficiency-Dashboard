@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 from tower_mirror.database import connect
-from tower_mirror.dashboard_snapshot import _score, _grade, PROCESS_NAMES
+from tower_mirror.dashboard_snapshot import _score, _grade, PROCESS_NAMES, CLASSIFICATION_CODE_NAMES
 from tower_mirror.presentation import balanced_percentages
 
 DB = Path(__file__).parent/'outputs/mirror/dashboard.sqlite'
@@ -77,7 +77,12 @@ def _source(table, selected_months, version):
             year, num = map(int,month.split('-'))
             clauses.append('(analysis_date BETWEEN ? AND ?)')
             params.extend([month+'-01',month+f'-{calendar.monthrange(year,num)[1]:02d}'])
-        return pd.read_sql_query(f'SELECT * FROM {table} WHERE '+ ' OR '.join(clauses)+' ORDER BY analysis_date,factory',con,params=params)
+        frame = pd.read_sql_query(f'SELECT * FROM {table} WHERE '+ ' OR '.join(clauses)+' ORDER BY analysis_date,factory',con,params=params)
+    if table == 'analysis_classification_daily':
+        # Older published aggregates contain ERP codes alongside APS names.
+        # Normalize before downstream grouping so one product family stays together.
+        frame['classification'] = frame['classification'].replace(CLASSIFICATION_CODE_NAMES)
+    return frame
 
 
 def _rates(df):

@@ -947,30 +947,20 @@ def _build_factory_line_fig(
     ts_df["x_label"] = ts_df["기간"].map(label_map)
 
     color_map = _factory_color_discrete_map(factories)
-    # NOTE: 당월/전월처럼 집계 데이터가 1일치만 있을 때 `mode='lines'`만 있으면
-    # Plotly가 선분을 그릴 수 없어 "빈 그래프"처럼 보입니다. (범례만 보이는 현상)
-    # 1포인트 구간에서는 마커를 켜서 값이 보이도록 처리합니다.
-    _max_points = (
-        ts_df.dropna(subset=["값"])
-        .groupby("공장", dropna=False)["값"]
-        .size()
-        .max()
-        if len(ts_df) > 0
-        else 0
-    )
-    _show_markers = bool(_max_points <= 1)
+    # Show isolated production days after gaps, even in a month with many points.
     line_fig = px.line(
         ts_df,
         x="기간",
         y="값",
         color="공장",
         title=f"공장별 {metric_option} 추이",
-        markers=_show_markers,
+        markers=True,
         custom_data=["x_label"],
         color_discrete_map=color_map if color_map else None,
     )
     line_fig.update_traces(
         line=dict(width=3.5),
+        connectgaps=False,
         marker=dict(size=7),
         hovertemplate="공장=%{legendgroup}<br>기간=%{customdata[0]}<br>값=%{y:.1f}%<extra></extra>",
     )
@@ -2648,27 +2638,20 @@ try:
                 label_map = {pd.Timestamp(v): t for v, t in zip(tickvals, ticktext, strict=False)}
                 ts_df["x_label"] = ts_df["기간"].map(label_map)
 
-                _max_points = (
-                    ts_df.dropna(subset=["값"])
-                    .groupby("공장", dropna=False)["값"]
-                    .size()
-                    .max()
-                    if len(ts_df) > 0
-                    else 0
-                )
-                _show_markers = bool(_max_points <= 1)
+                # Keep isolated days after non-production gaps visible.
                 line_fig = px.line(
                     ts_df,
                     x="기간",
                     y="값",
                     color="공장",
                     title=f"공장별 {metric_option} 추이",
-                    markers=_show_markers,
+                    markers=True,
                     custom_data=["x_label"],
                     color_discrete_map=_factory_colors_ui if _factory_colors_ui else None,
                 )
                 line_fig.update_traces(
                     line=dict(width=3.5),
+                    connectgaps=False,
                     marker=dict(size=7),
                     hovertemplate="공장=%{legendgroup}<br>기간=%{customdata[0]}<br>값=%{y:.1f}%<extra></extra>",
                 )
