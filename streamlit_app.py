@@ -13,6 +13,7 @@ import json
 from xlsxwriter.utility import xl_rowcol_to_cell
 import textwrap
 import mirror_adapter as _mirror
+from mirror_freshness import publication_status
 
 
 # ====== Dashboard color system (global) ======
@@ -1992,6 +1993,7 @@ except Exception as e:
     st.stop()
 
 try:
+    _rendered_mirror_revision = _mirror.revision()
     if use_store:
         _store_dir_str = str(store_dir)
         _daily_dir_state = _store_table_dir_state_ns(store_dir, "result1_daily")
@@ -2039,7 +2041,10 @@ try:
     # 금일 데이터 제외 (아직 생산 중이므로) - KST 기준
     now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
     today = now_kst.date()
-    st.caption(f"마지막 게시 완료(KST): {_mirror.published_at()}" if _mirror.active(store_dir) else f"기준 시각(KST): {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
+    if _mirror.active(store_dir):
+        publication_status(_rendered_mirror_revision, today)
+    else:
+        st.caption(f"기준 시각(KST): {now_kst.strftime('%Y-%m-%d %H:%M:%S')}")
 
     # 필수 데이터 검증/정규화
     if daily_summary is None or len(daily_summary) == 0 or "날짜_date" not in daily_summary.columns:
