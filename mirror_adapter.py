@@ -10,6 +10,7 @@ import streamlit as st
 from tower_mirror.database import connect
 from tower_mirror.dashboard_snapshot import _score, _grade, PROCESS_NAMES, CLASSIFICATION_CODE_NAMES
 from tower_mirror.presentation import balanced_percentages
+from tower_mirror import publication_version  # watched dependency for data-only publications
 
 DB = Path(__file__).parent/'outputs/mirror/dashboard.sqlite'
 TABLES = {'result1_daily', 'result1_factory', 'result1_spec_daily',
