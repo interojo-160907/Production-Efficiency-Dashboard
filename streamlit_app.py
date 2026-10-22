@@ -12,7 +12,15 @@ import io
 import json
 from xlsxwriter.utility import xl_rowcol_to_cell
 import textwrap
+import importlib
 import mirror_adapter as _mirror
+# Cloud can update the entry script while imported modules remain in memory.
+# Upgrade the old adapter once; normal reruns keep the shared sync resource.
+if not hasattr(_mirror, 'refresh_publication'):
+    importlib.reload(_mirror)
+import mirror_freshness
+if not getattr(mirror_freshness, 'REMOTE_REFRESH_ENABLED', False):
+    importlib.reload(mirror_freshness)
 from mirror_freshness import publication_status
 
 

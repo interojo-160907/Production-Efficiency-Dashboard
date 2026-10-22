@@ -5,6 +5,8 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 import mirror_adapter as mirror
 
+REMOTE_REFRESH_ENABLED = True
+
 
 def lag_days(date_to, today):
     """Only completed days count; weekends are not silently assumed idle."""
