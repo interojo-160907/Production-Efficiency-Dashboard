@@ -1993,6 +1993,7 @@ except Exception as e:
     st.stop()
 
 try:
+    _mirror.refresh_publication()
     _rendered_mirror_revision = _mirror.revision()
     if use_store:
         _store_dir_str = str(store_dir)

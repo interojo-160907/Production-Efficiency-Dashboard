@@ -11,6 +11,7 @@ from tower_mirror.database import connect
 from tower_mirror.dashboard_snapshot import _score, _grade, PROCESS_NAMES, CLASSIFICATION_CODE_NAMES
 from tower_mirror.presentation import balanced_percentages
 from tower_mirror import publication_version  # watched dependency for data-only publications
+from mirror_remote import PublicationSync
 
 DB = Path(__file__).parent/'outputs/mirror/dashboard.sqlite'
 TABLES = {'result1_daily', 'result1_factory', 'result1_spec_daily',
@@ -23,13 +24,36 @@ def active(path=None):
     return DB.is_file() and (path is None or Path(path).resolve() == DB.parent.resolve())
 
 
+@st.cache_resource(show_spinner=False)
+def _remote_sync():
+    return PublicationSync(DB, Path(__file__).parent / 'tower_mirror')
+
+
+def refresh_publication(force=False):
+    if not active():
+        return ''
+    path, error = _remote_sync().refresh(force=force)
+    # A session keeps one immutable snapshot for its entire render, even if a
+    # different viewer discovers a newer publication while charts are loading.
+    st.session_state['_mirror_database'] = str(path)
+    return error
+
+
+def current_database():
+    return Path(st.session_state.get('_mirror_database', str(DB)))
+
+
 def revision():
-    return DB.stat().st_mtime_ns if DB.exists() else 0
+    path = current_database()
+    if not path.exists():
+        return 0
+    # Include path as well as mtime: sessions can use different immutable files.
+    return int(hashlib.sha256(f'{path}:{path.stat().st_mtime_ns}'.encode()).hexdigest(), 16)
 
 
 @st.cache_data(show_spinner=False, max_entries=2)
 def metadata(version):
-    with connect(DB) as con:
+    with connect(current_database()) as con:
         result = json.loads(con.execute('SELECT value FROM mirror_meta WHERE key="metadata"').fetchone()[0])
     for field, name in [('engine_sha256','dashboard_snapshot.py'), ('presentation_sha256','presentation.py')]:
         text = (Path(__file__).parent/'tower_mirror'/name).read_text(encoding='utf-8')
@@ -41,7 +65,7 @@ def metadata(version):
 def published_at():
     meta = metadata(revision())
     try:
-        receipt = json.loads((DB.parent/'publication.json').read_text(encoding='utf-8'))
+        receipt = json.loads((current_database().parent/'publication.json').read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return '게시 완료 기록 확인 중'
     if receipt.get('content_hash') != meta['content_hash']:
@@ -53,13 +77,13 @@ def published_at():
 
 @st.cache_data(show_spinner=False, max_entries=2)
 def profile(version):
-    with connect(DB) as con:
+    with connect(current_database()) as con:
         return dict(con.execute('SELECT * FROM score_profile WHERE is_active=1 ORDER BY profile_id DESC LIMIT 1').fetchone())
 
 
 def months(table):
     source = 'analysis_factory_daily' if table.startswith('result1') else 'analysis_process_daily'
-    with connect(DB) as con:
+    with connect(current_database()) as con:
         return tuple(r[0] for r in con.execute(f'SELECT DISTINCT substr(analysis_date,1,7) FROM {source} ORDER BY 1'))
 
 
@@ -68,7 +92,7 @@ def _source(table, selected_months, version):
     metadata(version)
     if table not in ('analysis_factory_daily','analysis_process_daily','analysis_classification_daily'):
         raise ValueError(table)
-    with connect(DB) as con:
+    with connect(current_database()) as con:
         if not selected_months:
             return pd.read_sql_query(f'SELECT * FROM {table} WHERE 0', con)
         # Date predicates use the publication DB's index.

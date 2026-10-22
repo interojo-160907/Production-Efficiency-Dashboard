@@ -14,11 +14,14 @@ def lag_days(date_to, today):
 @st.fragment(run_every=60)
 def publication_status(rendered_revision, rendered_day):
     today = datetime.now(ZoneInfo("Asia/Seoul")).date()
+    error = mirror.refresh_publication()
     current = mirror.revision()
     if current != rendered_revision or today != rendered_day:
         st.rerun()
     meta = mirror.metadata(current)
     st.caption(f"마지막 게시 완료(KST): {mirror.published_at()} · 데이터: {meta['date_to']}까지")
+    if error:
+        st.warning(f'{error} 마지막으로 확인된 데이터를 표시합니다.')
     lag = lag_days(meta['date_to'], today)
     if lag:
         st.warning(
@@ -27,5 +30,6 @@ def publication_status(rendered_revision, rendered_day):
             "새로 확인 후에도 같으면 컨트롤타워 게시 상태와 Streamlit 배포 상태를 확인하세요."
         )
     if st.button("최신 데이터 다시 확인", key="mirror_refresh"):
+        mirror.refresh_publication(force=True)
         st.rerun()
-    st.caption("열어 둔 화면은 60초마다 새 게시본을 확인합니다. 서버에 배포된 자료만 표시합니다.")
+    st.caption("60초마다 GitHub의 최신 게시 데이터를 확인하고 자동 반영합니다.")

@@ -12,7 +12,8 @@ class FreshnessTests(unittest.TestCase):
         self.assertEqual(lag_days('2026-10-15', date(2026,10,15)), 0)
 
     def test_new_publication_requests_full_rerun(self):
-        with patch('mirror_freshness.mirror.revision', return_value=2), \
+        with patch('mirror_freshness.mirror.refresh_publication', return_value=''), \
+             patch('mirror_freshness.mirror.revision', return_value=2), \
              patch('mirror_freshness.st.rerun', side_effect=RuntimeError('rerun')):
             with self.assertRaisesRegex(RuntimeError, 'rerun'):
                 publication_status.__wrapped__(1, date(2026,10,15))
